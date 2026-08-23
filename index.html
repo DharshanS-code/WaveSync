@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0e1620" />
+  <title>WaveSync — Zero-Latency Synced Music</title>
+  <meta name="description" content="WaveSync plays one song across every phone on the same Wi-Fi, perfectly in time. Devices join automatically — no codes, no accounts, no cloud." />
+  <meta property="og:title" content="WaveSync — Zero-Latency Synced Music" />
+  <meta property="og:description" content="Open the page on the same Wi-Fi and you're already in. The host controls the track; guests play in perfect time." />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main id="app">
+    <header class="rise">
+      <div class="brand">
+        <div class="logo pill glow">
+          <div class="bars" id="bars">
+            <span></span><span></span><span></span><span></span>
+          </div>
+        </div>
+        <div>
+          <h1>WaveSync</h1>
+          <p class="muted small">One song. Every phone. Same instant.</p>
+        </div>
+      </div>
+      <div class="right-align">
+        <p class="small bold" id="deviceName">Device</p>
+        <p class="mono tiny muted" id="deviceId">id …</p>
+      </div>
+    </header>
+
+    <!-- Auto-connection status -->
+    <section class="surface rise" id="statusBar">
+      <div class="status-left">
+        <span class="dot" id="statusDot"></span>
+        <div>
+          <p class="small bold" id="statusTitle">Scanning the network…</p>
+          <p class="tiny muted" id="statusSub">Devices on the same Wi-Fi join automatically</p>
+        </div>
+      </div>
+      <div class="status-right" id="driftBox" hidden>
+        <p class="mono big bold" id="driftValue">±0 ms</p>
+        <p class="tiny muted" id="clockOffset">clock 0 ms</p>
+      </div>
+    </section>
+
+    <!-- Player -->
+    <section class="surface rise">
+      <div class="player-head">
+        <div class="art">
+          <div class="art-bg" id="artBg"></div>
+          <span class="art-letter" id="artLetter">W</span>
+        </div>
+        <div class="player-info">
+          <p class="track-name" id="trackName">No track selected</p>
+          <p class="tiny muted" id="trackSub">Local file · MP3, AAC, OGG, FLAC, WAV</p>
+          <div class="progress">
+            <div class="progress-bar" id="progressBar"></div>
+          </div>
+          <div class="time-row">
+            <span class="mono tiny muted" id="curTime">0:00</span>
+            <span class="mono tiny muted" id="durTime">0:00</span>
+          </div>
+        </div>
+      </div>
+      <div class="player-controls" id="controls"></div>
+    </section>
+
+    <!-- Permission requests (host only) -->
+    <section class="surface rise" id="reqSection" hidden>
+      <h2 class="small bold">Permission requests</h2>
+      <div class="device-list" id="reqList"></div>
+    </section>
+
+    <!-- Connected devices -->
+    <section class="surface rise">
+      <h2 class="small bold">Connected devices</h2>
+      <div class="device-list" id="peerList"></div>
+    </section>
+
+    <section class="surface rise stats-grid">
+      <div><p class="mono bold primary" id="statDrifter">0.5 s</p><p class="tiny muted">Drifter</p></div>
+      <div><p class="mono bold primary" id="statDeadband">10 ms</p><p class="tiny muted">Deadband</p></div>
+      <div><p class="mono bold primary" id="statCorrections">0</p><p class="tiny muted">Corrections</p></div>
+    </section>
+
+    <audio id="audio" hidden></audio>
+  </main>
+
+  <script src="sync-engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
