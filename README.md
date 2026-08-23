@@ -1,7 +1,7 @@
 # WaveSync
 
 **Zero-latency synced music over Wi-Fi. One song, every phone, same instant.**
-
+#https://github.com/DharshanS-code/WaveSync#quick-start
 WaveSync plays one track across every device on the same Wi-Fi network,
 perfectly in time — no codes, no accounts, no cloud. Open the page, and
 you're already in.
