@@ -41,19 +41,29 @@ wavesync/
 
 ### Option A — Two or more devices on the same Wi-Fi (full sync)
 
-1. **Install Node.js** (Termux: `pkg install nodejs-lts`).
+1. **Install Node.js** (for Termux: `pkg install nodejs-lts`).
 2. head to source folder(Download and unzip the source code):
    ```sh
    cd <path>
    ```
-3. Start the relay on one device:
+   Terminal Paths by Operating:
+   
+   Termux: Type ```cd ~/storage/downloads```
+   
+   SystemmacOS & Linux: Type ```cd ~/Downloads```
+   
+   Windows (CMD): Type ```cd %USERPROFILE%\Downloads```
+   
+   Windows (PowerShell): Type ```cd "$HOME\Downloads"```
+   
+4. Start the relay on one device:
 
    ```sh
    node server.js
    ```
 
-4. It prints local URLs like `http://192.168.1.42:8080`.
-5. Open that URL on every phone connected to the same Wi-Fi / hotspot.
+5. It prints local URLs like `http://192.168.1.42:8080`.
+6. Open that URL on every phone connected to the same Wi-Fi / hotspot.
    They join automatically — no codes.
 
 ### Option B — Single device / quick test
