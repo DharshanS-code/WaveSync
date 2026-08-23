@@ -57,7 +57,7 @@ sync activates when a second tab/device connects.
 
 ```sh
 pkg install nodejs-lts git
-git clone <your-repo-url> wavesync
+git clone https://github.com/DharshanS-code/WaveSync wavesync
 cd wavesync
 node server.js
 ```
