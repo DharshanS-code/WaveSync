@@ -34,6 +34,10 @@
     curTime: document.getElementById("curTime"),
     durTime: document.getElementById("durTime"),
     controls: document.getElementById("controls"),
+    fileLabel: document.getElementById("fileLabel"),
+    fileInput: document.getElementById("fileInput"),
+    reqBtn: document.getElementById("reqBtn"),
+    playBtn: document.getElementById("playBtn"),
     reqSection: document.getElementById("reqSection"),
     reqList: document.getElementById("reqList"),
     peerList: document.getElementById("peerList"),
@@ -66,6 +70,11 @@
     if (!file) return;
     var url = URL.createObjectURL(file);
     track = { name: file.name.replace(/\.[^.]+$/, ""), url: url };
+    
+    // Bind audio source to HTML player
+    audio.src = url;
+    audio.load();
+
     pos = 0;
     playing = false;
     engine.promote();
@@ -75,11 +84,28 @@
   function toggle() {
     if (!audio || !track) return;
     if (audio.paused) {
-      audio.play().catch(function () {});
+      audio.play().catch(function (e) {
+        console.error("Playback blocked:", e);
+      });
     } else {
       audio.pause();
     }
   }
+
+  // Persistent Event Listeners (Attached once)
+  els.fileInput.addEventListener("change", function (e) {
+    if (e.target.files && e.target.files[0]) {
+      pick(e.target.files[0]);
+    }
+  });
+
+  els.playBtn.addEventListener("click", toggle);
+
+  els.reqBtn.addEventListener("click", function () {
+    engine.requestUpload();
+    asked = true;
+    render(engineState);
+  });
 
   audio.addEventListener("timeupdate", function () {
     pos = audio.currentTime;
@@ -162,40 +188,19 @@
     // Host track sync
     if (isHost) engine.setTrack(track ? track.name : null);
 
-    // Controls
-    els.controls.innerHTML = "";
+    // Update controls visually without wiping the DOM
     if (canControl) {
-      var label = document.createElement("label");
-      label.className = "btn";
-      label.textContent = "Choose file";
-      var input = document.createElement("input");
-      input.type = "file";
-      input.accept = "audio/*";
-      input.style.display = "none";
-      input.addEventListener("change", function (e) {
-        pick(e.target.files && e.target.files[0]);
-      });
-      label.appendChild(input);
-      els.controls.appendChild(label);
+      els.fileLabel.hidden = false;
+      els.reqBtn.hidden = true;
     } else {
-      var reqBtn = document.createElement("button");
-      reqBtn.className = "btn";
-      reqBtn.textContent = asked ? "Waiting for host…" : "Request permission to play";
-      reqBtn.disabled = asked || s.role === "idle";
-      reqBtn.addEventListener("click", function () {
-        engine.requestUpload();
-        asked = true;
-        render(s);
-      });
-      els.controls.appendChild(reqBtn);
+      els.fileLabel.hidden = true;
+      els.reqBtn.hidden = false;
+      els.reqBtn.textContent = asked ? "Waiting for host…" : "Request permission to play";
+      els.reqBtn.disabled = asked || s.role === "idle";
     }
 
-    var playBtn = document.createElement("button");
-    playBtn.className = "btn btn-pill";
-    playBtn.textContent = playing ? "Pause" : "Play";
-    playBtn.disabled = !track || !canControl;
-    playBtn.addEventListener("click", toggle);
-    els.controls.appendChild(playBtn);
+    els.playBtn.textContent = playing ? "Pause" : "Play";
+    els.playBtn.disabled = !track || !canControl;
 
     // Reset ask state when permission granted
     if (s.canUpload) asked = false;
