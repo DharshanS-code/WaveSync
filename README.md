@@ -2,10 +2,6 @@
 
 **Zero-latency synced music over Wi-Fi. One song, every phone, same instant.**
 
-**Important Steps** 👇🏻
-
-https://github.com/DharshanS-code/WaveSync#quick-start
-
 WaveSync plays one track across every device on the same Wi-Fi network,
 perfectly in time — no codes, no accounts, no cloud. Open the page, and
 you're already in.
@@ -41,29 +37,15 @@ wavesync/
 
 ### Option A — Two or more devices on the same Wi-Fi (full sync)
 
-1. **Install Node.js** (for Termux: `pkg install nodejs-lts`).
-2. head to source folder(Download and unzip the source code):
-   ```sh
-   cd <path>
-   ```
-   Terminal Paths by Operating:
-   
-   Termux: Type ```cd ~/storage/downloads```
-   
-   SystemmacOS & Linux: Type ```cd ~/Downloads```
-   
-   Windows (CMD): Type ```cd %USERPROFILE%\Downloads```
-   
-   Windows (PowerShell): Type ```cd "$HOME\Downloads"```
-   
-4. Start the relay on one device:
+1. **Install Node.js** (Termux: `pkg install nodejs-lts`).
+2. Start the relay on one device:
 
    ```sh
    node server.js
    ```
 
-5. It prints local URLs like `http://192.168.1.42:8080`.
-6. Open that URL on every phone connected to the same Wi-Fi / hotspot.
+3. It prints local URLs like `http://192.168.1.42:8080`.
+4. Open that URL on every phone connected to the same Wi-Fi / hotspot.
    They join automatically — no codes.
 
 ### Option B — Single device / quick test
@@ -75,7 +57,7 @@ sync activates when a second tab/device connects.
 
 ```sh
 pkg install nodejs-lts git
-git clone https://github.com/DharshanS-code/WaveSync wavesync
+git clone <your-repo-url> wavesync
 cd wavesync
 node server.js
 ```

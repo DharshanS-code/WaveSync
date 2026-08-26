@@ -17,7 +17,9 @@
 
 var DRIFT_TICK_MS = 500;
 var DEADBAND_MS = 10;
-var SEEK_THRESHOLD_MS = 60;
+var SEEK_THRESHOLD_MS = 300;
+var SEEK_LEAD_MS = 60;      // typical cost of a seek; aim slightly ahead
+var SEEK_COOLDOWN_MS = 1500; // let the decoder settle before judging again
 var DISCOVERY_MS = 1200;
 var CHANNEL = "wavesync-lan";
 
@@ -292,29 +294,41 @@ SyncEngine.prototype.tick = function () {
   var beat = this.lastBeat;
   if (!a || !beat) return;
 
+  // No local copy of the track yet -> nothing to drift against.
+  if (!a.src) {
+    this.drift = 0;
+    this.emit();
+    return;
+  }
+
   if (!beat.playing) {
     if (!a.paused) a.pause();
     this.drift = 0;
     this.emit();
     return;
   }
-  if (a.paused && a.src) {
-    var self = this;
-    a.play().catch(function () {});
-  }
+  if (a.paused) a.play().catch(function () {});
 
   var expected = beat.position + (this.now() - beat.atGmt);
   var d = a.currentTime * 1000 - expected;
   this.drift = d;
 
   var abs = Math.abs(d);
-  if (abs > SEEK_THRESHOLD_MS) {
-    a.currentTime = Math.max(0, expected / 1000);
+  var settling = Date.now() - (this.lastSeek || 0) < SEEK_COOLDOWN_MS;
+
+  if (abs > SEEK_THRESHOLD_MS && !settling) {
+    // Way off (just joined, or the track was changed): jump.
+    a.currentTime = Math.max(0, (expected + SEEK_LEAD_MS) / 1000);
     a.playbackRate = 1;
+    this.lastSeek = Date.now();
     this.corrections++;
-  } else if (abs > DEADBAND_MS) {
-    a.playbackRate = d > 0 ? 0.998 : 1.002;
-  } else {
+  } else if (!settling && abs > DEADBAND_MS) {
+    // Proportional nudge — pulls the last ms in without an audible jump.
+    var rate = 1 - d / 8000;
+    if (rate < 0.97) rate = 0.97;
+    if (rate > 1.03) rate = 1.03;
+    a.playbackRate = rate;
+  } else if (!settling) {
     a.playbackRate = 1;
   }
 

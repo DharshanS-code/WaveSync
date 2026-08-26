@@ -237,3 +237,15 @@ header h1 { font-size: 1.25rem; font-weight: 700; }
   .player-head { gap: 0.75rem; }
   .art { width: 4rem; height: 4rem; }
 }
+
+
+/* ---- layout stability: no vertical jitter while syncing ---- */
+.status-right { min-width: 6.5rem; text-align: right; }
+.player-head { min-height: 5rem; }
+.track-name { min-height: 1.4em; }
+.player-controls { min-height: 2.75rem; align-items: center; }
+#peerList { min-height: 2.25rem; }
+.mono { font-variant-numeric: tabular-nums; }
+label.btn { display: inline-flex; align-items: center; cursor: pointer; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+[hidden] { display: none !important; }
