@@ -1,0 +1,380 @@
+// app.js — WaveSync orchestrator. Wires signaling, WebRTC, audio + sync engines
+// and the UI for both host and guest roles.
+import { CONFIG } from './config.js';
+import { AudioEngine } from './audio-engine.js';
+import { SyncController } from './sync-engine.js';
+import { SignalClient, PeerManager } from './network.js';
+import { UI, fmtTime } from './ui.js';
+
+const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars
+const newCode = () => Array.from({ length: 6 }, () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)]).join('');
+
+class WaveSync {
+  constructor() {
+    this.ui = new UI();
+    this.audio = new AudioEngine();
+    this.signal = null;
+    this.peers = null;
+    this.sync = null;         // guest SyncController
+    this.role = null;
+    this.code = null;
+    this.seq = 0;             // host timeline sequence
+    this.hbTimer = null;      // host heartbeat
+    this.tickTimer = null;    // ui tick
+    this.fileBuffer = null;   // host: raw file bytes for transfer
+    this.fileMeta = null;
+    this._bind();
+    this._autoJoin();
+    this._registerSW();
+  }
+
+  // ---------- setup ----------
+  _bind() {
+    this._bindSupport();
+    document.getElementById('btn-create').onclick = () => this.createRoom();
+    document.getElementById('btn-open-join').onclick = () => {
+      const p = document.getElementById('join-panel');
+      p.hidden = !p.hidden;
+      if (!p.hidden) document.getElementById('join-code').focus();
+    };
+    document.getElementById('btn-join').onclick = () => this.joinRoom();
+    document.getElementById('join-code').addEventListener('input', (e) => {
+      e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+    });
+    document.getElementById('join-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.joinRoom(); });
+
+    // Host controls
+    document.getElementById('host-file').addEventListener('change', (e) => this.onFile(e.target.files[0]));
+    document.getElementById('host-play').onclick = () => this.togglePlay();
+    document.getElementById('host-seek').addEventListener('input', (e) => this.onSeek(e.target.value));
+    document.getElementById('host-vol').addEventListener('input', (e) => this.audio.setVolume(e.target.value / 100));
+    document.getElementById('guest-vol').addEventListener('input', (e) => this.audio.setVolume(e.target.value / 100));
+
+    // Leave / share (delegated)
+    document.querySelectorAll('[data-action="leave"]').forEach((b) => b.onclick = () => this.leave());
+    document.querySelectorAll('[data-action="share"]').forEach((b) => b.onclick = () => this.share());
+
+    window.addEventListener('beforeunload', () => { if (this.signal) this.signal.close(); });
+  }
+
+  _bindSupport() {
+    const overlay = document.getElementById('support-overlay');
+    const open = () => { overlay.hidden = false; requestAnimationFrame(() => overlay.classList.add('is-open')); };
+    const close = () => { overlay.classList.remove('is-open'); setTimeout(() => { overlay.hidden = true; }, 260); };
+    document.getElementById('support-fab').onclick = open;
+    document.getElementById('support-close').onclick = close;
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !overlay.hidden) close(); });
+    document.getElementById('support-copy').onclick = async () => {
+      try { await navigator.clipboard.writeText('dharshandcu@nyes'); this.ui.toast('UPI ID copied'); }
+      catch (e) { this.ui.toast('dharshandcu@nyes'); }
+    };
+  }
+
+  _autoJoin() {
+    const code = new URLSearchParams(location.search).get('room');
+    if (code) {
+      document.getElementById('btn-open-join').click();
+      document.getElementById('join-code').value = code.toUpperCase();
+    }
+  }
+
+  async _registerSW() {
+    if ('serviceWorker' in navigator) {
+      try { await navigator.serviceWorker.register('./sw.js'); } catch (e) {}
+    }
+  }
+
+  // ---------- signaling lifecycle ----------
+  _makeSignal(code, role, name) {
+    const s = new SignalClient(CONFIG.signalUrl, CONFIG);
+    this.signal = s;
+    this.code = code;
+    this.role = role;
+    this.ui.connDot('wait');
+
+    s.addEventListener('reconnecting', () => this.ui.connDot('wait'));
+    s.addEventListener('ws-close', () => this.ui.connDot('wait'));
+    s.addEventListener('error', (e) => this._onSignalError(e.detail.msg));
+    s.addEventListener('clock', (e) => this._onClock(e.detail));
+
+    this.peers = new PeerManager(s, CONFIG);
+
+    if (role === 'host') this._wireHost();
+    else this._wireGuest();
+
+    s.connect(code, role, name);
+  }
+
+  _onSignalError(msg) {
+    if (this.role === 'guest' && !this.audio.hasAudio()) {
+      const el = document.getElementById('join-error');
+      el.textContent = msg || 'Could not join room';
+      this.signal.close();
+      this.signal = null;
+      this.ui.show('home');
+    } else {
+      this.ui.toast(msg || 'Signaling error');
+    }
+  }
+
+  _onClock(d) {
+    const txt = d.rtt === Infinity ? '—' : `${Math.round(d.offset)}ms (RTT ${Math.round(d.rtt)}ms)`;
+    if (this.role === 'host') this.ui.set('host-offset', txt);
+    else this.ui.set('guest-rtt', d.rtt === Infinity ? '—' : `${Math.round(d.rtt)}ms`);
+    this.ui.connDot('on');
+  }
+
+  // ---------- HOST ----------
+  createRoom() {
+    const code = newCode();
+    this._makeSignal(code, 'host', 'Host');
+    this.ui.set('host-code', code);
+    this.ui.show('host');
+    this.audio.resume();
+  }
+
+  _wireHost() {
+    const s = this.signal;
+    s.addEventListener('created', (e) => { this.ui.set('host-code', e.detail.code); });
+
+    // When a guest's datachannel opens, push current track + timeline.
+    this.peers.addEventListener('dc-open', (e) => {
+      this._updateDeviceCount();
+      const peer = e.detail.peer;
+      if (this.fileMeta) {
+        peer.dc.send(JSON.stringify({ kind: 'file-header', name: this.fileMeta.name, mime: this.fileMeta.mime, size: this.fileBuffer.byteLength }));
+        peer.sendFile(this.fileBuffer, this.fileMeta);
+      }
+      this._broadcastMeta();
+      this._broadcastTimeline();
+    });
+    this.peers.addEventListener('roster', () => this._updateDeviceCount());
+    this.peers.addEventListener('peer-state', () => this._updateDeviceCount());
+
+    this._startUiTick();
+  }
+
+  async onFile(file) {
+    if (!file) return;
+    this.ui.set('host-sub', 'Decoding…');
+    try {
+      await this.audio.resume();
+      const ab = await file.arrayBuffer();
+      this.fileBuffer = ab.slice(0);
+      const dur = await this.audio.decode(ab);
+      this.fileMeta = { name: file.name.replace(/\.[^.]+$/, ''), fileName: file.name, mime: file.type || 'audio/mpeg', duration: dur };
+      document.getElementById('host-play').disabled = false;
+      this.ui.set('host-title', this.fileMeta.name);
+      this.ui.set('host-sub', 'Ready to play');
+      this.ui.set('host-dur', fmtTime(dur));
+      this._setMediaSession(this.fileMeta.name);
+      // Send to any already-connected guests.
+      this.peers.broadcastFile(this.fileBuffer, this.fileMeta);
+      this._broadcastMeta();
+      this._broadcastTimeline();
+    } catch (err) {
+      this.ui.set('host-sub', 'Unsupported / corrupt file');
+      this.ui.toast('Could not decode this audio file');
+    }
+  }
+
+  togglePlay() {
+    if (!this.audio.hasAudio()) return;
+    if (this.audio.playing) this.audio.pause();
+    else this.audio.play();
+    this._syncPlayIcon();
+    this.ui.setDisc('host', this.audio.playing);
+    this._broadcastTimeline();
+  }
+
+  onSeek(v) {
+    if (!this.audio.hasAudio()) return;
+    const pos = (v / 1000) * this.audio.duration;
+    this.audio.seek(pos, this.audio.playing);
+    this._broadcastTimeline();
+  }
+
+  _broadcastMeta() {
+    if (!this.fileMeta) return;
+    this.signal.control({ kind: 'meta', name: this.fileMeta.name, duration: this.fileMeta.duration });
+  }
+
+  _broadcastTimeline() {
+    if (!this.signal) return;
+    this.seq++;
+    this.signal.control({
+      kind: 'timeline',
+      playing: this.audio.playing,
+      position: this.audio.position(),
+      atServerTime: this.signal.clock.now(),
+      seq: this.seq
+    });
+  }
+
+  _updateDeviceCount() {
+    let connected = 0;
+    for (const p of this.peers.peers.values()) if (p.connected) connected++;
+    this.ui.set('host-devices', String(1 + connected));
+  }
+
+  // ---------- GUEST ----------
+  joinRoom() {
+    const code = document.getElementById('join-code').value.trim().toUpperCase();
+    const name = document.getElementById('join-name').value.trim();
+    const err = document.getElementById('join-error');
+    err.textContent = '';
+    if (code.length < 4) { err.textContent = 'Enter a valid room code'; return; }
+    this._makeSignal(code, 'guest', name || 'Guest');
+    this.ui.set('guest-code', code);
+    this.ui.show('guest');
+    this.audio.resume();
+    this.sync = new SyncController(this.audio, this.signal.clock, CONFIG);
+    this.sync.onStatus = (st) => this._onSyncStatus(st);
+  }
+
+  _wireGuest() {
+    const s = this.signal;
+    s.addEventListener('joined', (e) => {
+      this.ui.set('guest-code', e.detail.code);
+      this.ui.setBadge('guest-conn', 'In room · linking…', 'wait');
+    });
+    s.addEventListener('control', (e) => this._onControl(e.detail));
+    s.addEventListener('host-left', () => {
+      this.ui.setBadge('guest-conn', 'Host left', 'bad');
+      this.ui.set('guest-sub', 'Host disconnected');
+      if (this.sync) this.sync.stop();
+      this.audio.pause();
+    });
+
+    this.peers.addEventListener('peer-state', (e) => {
+      const st = e.detail.state;
+      if (st === 'connected') this.ui.setBadge('guest-conn', 'P2P connected', 'good');
+      else if (st === 'connecting') this.ui.setBadge('guest-conn', 'Linking…', 'wait');
+      else if (st === 'failed') this.ui.setBadge('guest-conn', 'Link failed · retrying', 'bad');
+    });
+    this.peers.addEventListener('file-start', (e) => {
+      this.ui.set('guest-sub', 'Receiving audio…');
+    });
+    this.peers.addEventListener('file-progress', (e) => {
+      this.ui.set('guest-buffer', Math.round(e.detail.ratio * 100) + '%');
+    });
+    this.peers.addEventListener('file-done', async (e) => {
+      try {
+        await this.audio.resume();
+        await this.audio.decode(e.detail.buffer);
+        this.ui.set('guest-buffer', '100%');
+        this.ui.set('guest-dur', fmtTime(this.audio.duration));
+        this.ui.set('guest-sub', 'Ready · syncing');
+        this.sync.start();
+        if (this.sync.timeline) this.sync.setTimeline(this.sync.timeline);
+        this._setMediaSession(this.fileMeta ? this.fileMeta.name : 'WaveSync');
+      } catch (err) {
+        this.ui.set('guest-sub', 'Decode failed');
+      }
+    });
+
+    this._startUiTick();
+  }
+
+  _onControl(m) {
+    const d = m.data;
+    if (!d) return;
+    if (d.kind === 'meta') {
+      this.fileMeta = { name: d.name, duration: d.duration };
+      this.ui.set('guest-title', d.name);
+      this.ui.set('guest-dur', fmtTime(d.duration));
+    } else if (d.kind === 'timeline') {
+      const tl = { playing: d.playing, position: d.position, atServerTime: d.atServerTime, seq: d.seq };
+      if (this.sync) this.sync.setTimeline(tl);
+      this._setGuestPlayState(d.playing);
+      this.ui.setDisc('guest', d.playing);
+    }
+  }
+
+  _onSyncStatus(st) {
+    const ms = Math.round(st.error * 1000);
+    const cls = Math.abs(ms) < 30 ? 'good' : Math.abs(ms) < 120 ? 'wait' : 'bad';
+    const el = document.getElementById('guest-err');
+    el.textContent = `${ms >= 0 ? '+' : ''}${ms} ms`;
+    el.className = 'status-row__v badge badge--' + cls;
+  }
+
+  _setGuestPlayState(playing) {
+    const wrap = document.getElementById('guest-playstate');
+    wrap.classList.toggle('is-playing', playing);
+    this.ui.set('guest-playstate-text', playing ? 'Playing' : 'Paused');
+  }
+
+  // ---------- shared UI tick / heartbeat ----------
+  _startUiTick() {
+    this._stopTimers();
+    this.tickTimer = setInterval(() => this._tick(), 250);
+    if (this.role === 'host') this.hbTimer = setInterval(() => this._broadcastTimeline(), CONFIG.timelineHeartbeatMs);
+  }
+
+  _stopTimers() {
+    if (this.tickTimer) clearInterval(this.tickTimer);
+    if (this.hbTimer) clearInterval(this.hbTimer);
+    this.tickTimer = this.hbTimer = null;
+  }
+
+  _tick() {
+    const dur = this.audio.duration || 0;
+    const pos = this.audio.position();
+    if (this.role === 'host') {
+      this.ui.set('host-cur', fmtTime(pos));
+      const seek = document.getElementById('host-seek');
+      if (document.activeElement !== seek && dur) seek.value = String(Math.round((pos / dur) * 1000));
+      this._syncPlayIcon();
+    } else {
+      this.ui.set('guest-cur', fmtTime(pos));
+      const fill = document.getElementById('guest-progress');
+      if (fill && dur) fill.style.width = ((pos / dur) * 100) + '%';
+    }
+  }
+
+  _syncPlayIcon() {
+    this.ui.html('host-play-icon', this.audio.playing ? '❚❚' : '▶');
+  }
+
+  // ---------- media session ----------
+  _setMediaSession(title) {
+    if (!('mediaSession' in navigator)) return;
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({ title, artist: 'WaveSync', album: 'Room ' + (this.code || '') });
+      if (this.role === 'host') {
+        navigator.mediaSession.setActionHandler('play', () => this.togglePlay());
+        navigator.mediaSession.setActionHandler('pause', () => this.togglePlay());
+      }
+    } catch (e) {}
+  }
+
+  // ---------- misc ----------
+  async share() {
+    const url = `${location.origin}${location.pathname}?room=${this.code}`;
+    const data = { title: 'WaveSync', text: `Join my WaveSync room ${this.code}`, url };
+    try {
+      if (navigator.share) await navigator.share(data);
+      else { await navigator.clipboard.writeText(url); this.ui.toast('Room link copied'); }
+    } catch (e) {
+      try { await navigator.clipboard.writeText(url); this.ui.toast('Room link copied'); } catch (_) { this.ui.toast(url); }
+    }
+  }
+
+  leave() {
+    this._stopTimers();
+    if (this.sync) this.sync.stop();
+    this.audio.pause();
+    if (this.peers) this.peers.closeAll();
+    if (this.signal) this.signal.close();
+    this.signal = this.peers = this.sync = null;
+    this.role = this.code = null;
+    this.fileBuffer = this.fileMeta = null;
+    this.ui.connDot('off');
+    this.ui.show('home');
+    history.replaceState(null, '', location.pathname);
+  }
+}
+
+window.addEventListener('DOMContentLoaded', () => { window.wavesync = new WaveSync(); });

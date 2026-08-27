@@ -1,0 +1,19 @@
+{
+  "name": "wavesync-signal",
+  "version": "1.0.0",
+  "private": false,
+  "description": "WaveSync signaling — Cloudflare Worker (Durable Objects) + Node dev server.",
+  "license": "MIT",
+  "type": "module",
+  "main": "worker.js",
+  "scripts": {
+    "dev": "node dev-server.js",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "wrangler": "3.99.0"
+  }
+}
