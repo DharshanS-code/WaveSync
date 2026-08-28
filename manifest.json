@@ -1,0 +1,32 @@
+{
+  "name": "WaveSync — Synchronized Music Player",
+  "short_name": "WaveSync",
+  "description": "Play the same music in perfect sync across every device on your network.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#262323",
+  "theme_color": "#262323",
+  "categories": ["music", "entertainment", "utilities"],
+  "icons": [
+    {
+      "src": "./assets/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

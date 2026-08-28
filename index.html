@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#262323" />
+  <meta name="description" content="WaveSync — play the same music in perfect sync across every device on your network." />
+  <title>WaveSync</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="apple-touch-icon" href="./assets/icon-512.png" />
+  <link rel="icon" type="image/png" href="./assets/icon-512.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./src/styles.css" />
+</head>
+<body>
+  <div id="app" class="app">
+
+    <!-- ================= HOME ================= -->
+    <section class="screen screen--home is-active" data-screen="home">
+      <header class="brand">
+        <div class="brand__logo" aria-hidden="true">
+          <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+        </div>
+        <h1 class="brand__name">WaveSync</h1>
+        <p class="brand__tag">One song. Every device. In sync.</p>
+      </header>
+
+      <div class="home__actions">
+        <button class="clay-btn clay-btn--primary" id="btn-create" data-testid="home-create-room-btn">
+          <span class="clay-btn__icon">New</span>
+          <span class="clay-btn__label">Create Room</span>
+          <span class="clay-btn__sub">Host & pick the music</span>
+        </button>
+
+        <button class="clay-btn clay-btn--accent" id="btn-open-join" data-testid="home-join-room-btn">
+          <span class="clay-btn__icon">Join</span>
+          <span class="clay-btn__label">Join Room</span>
+          <span class="clay-btn__sub">Enter a room code</span>
+        </button>
+      </div>
+
+      <!-- Join panel -->
+      <div class="clay-card join-panel" id="join-panel" hidden>
+        <label class="field-label" for="join-code">Room code</label>
+        <input id="join-code" class="clay-input" inputmode="latin" autocomplete="off"
+               maxlength="7" placeholder="ABC123" data-testid="join-code-input" />
+        <input id="join-name" class="clay-input" placeholder="Your name (optional)" data-testid="join-name-input" />
+        <button class="clay-btn clay-btn--primary" id="btn-join" data-testid="join-submit-btn">Join Room</button>
+        <p class="join-error" id="join-error" data-testid="join-error"></p>
+      </div>
+
+      <footer class="home__footer">
+        <span id="conn-dot" class="conn-dot" data-testid="signal-status"></span>
+        <span id="conn-text">Ready</span>
+      </footer>
+    </section>
+
+    <!-- ================= HOST PLAYER ================= -->
+    <section class="screen screen--player" data-screen="host">
+      <div class="player__top">
+        <button class="icon-btn" data-action="leave" data-testid="host-back-btn" title="Back" aria-label="Back">Back</button>
+        <div class="room-chip" data-testid="host-room-chip">
+          <span class="room-chip__label">ROOM</span>
+          <span class="room-chip__code" id="host-code" data-testid="host-room-code">------</span>
+        </div>
+        <button class="icon-btn" data-action="share" data-testid="host-share-btn" title="Share link" aria-label="Share">Share</button>
+      </div>
+
+      <div class="artwork" data-testid="host-artwork">
+        <div class="artwork__glow"></div>
+        <div class="artwork__disc" id="host-disc">
+          <div class="artwork__wave"><span></span><span></span><span></span><span></span><span></span></div>
+        </div>
+      </div>
+
+      <div class="track">
+        <h2 class="track__title" id="host-title" data-testid="host-track-title">No track loaded</h2>
+        <p class="track__meta" id="host-sub" data-testid="host-track-sub">Pick a song from your device</p>
+      </div>
+
+      <div class="seek">
+        <span class="seek__time" id="host-cur">0:00</span>
+        <input type="range" class="clay-range" id="host-seek" min="0" max="1000" value="0" step="1" data-testid="host-seek" />
+        <span class="seek__time" id="host-dur">0:00</span>
+      </div>
+
+      <div class="transport">
+        <label class="clay-btn clay-btn--ghost file-pick" data-testid="host-pick-file">
+          <input type="file" id="host-file" accept="audio/*,.mp3,.aac,.wav,.ogg,.opus,.flac,.m4a" hidden />
+          <span>Choose file</span>
+        </label>
+        <button class="play-btn" id="host-play" data-testid="host-play-btn" disabled>
+          <span class="play-btn__icon" id="host-play-icon">Play</span>
+        </button>
+        <div class="vol">
+          <span class="vol__icon">Vol</span>
+          <input type="range" class="clay-range clay-range--sm" id="host-vol" min="0" max="100" value="100" data-testid="host-volume" />
+        </div>
+      </div>
+
+      <div class="clay-card status-card">
+        <div class="status-row">
+          <span class="status-row__k">Devices</span>
+          <span class="status-row__v" id="host-devices" data-testid="host-device-count">1</span>
+        </div>
+        <div class="status-row">
+          <span class="status-row__k">Sync</span>
+          <span class="status-row__v badge badge--host" id="host-sync" data-testid="host-sync-status">Host clock</span>
+        </div>
+        <div class="status-row">
+          <span class="status-row__k">Clock offset</span>
+          <span class="status-row__v" id="host-offset" data-testid="host-offset">—</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= GUEST PLAYER ================= -->
+    <section class="screen screen--player" data-screen="guest">
+      <div class="player__top">
+        <button class="icon-btn" data-action="leave" data-testid="guest-back-btn" title="Back" aria-label="Back">Back</button>
+        <div class="room-chip">
+          <span class="room-chip__label">ROOM</span>
+          <span class="room-chip__code" id="guest-code" data-testid="guest-room-code">------</span>
+        </div>
+      </div>
+
+      <div class="artwork" data-testid="guest-artwork">
+        <div class="artwork__glow"></div>
+        <div class="artwork__disc" id="guest-disc">
+          <div class="artwork__wave"><span></span><span></span><span></span><span></span><span></span></div>
+        </div>
+      </div>
+
+      <div class="track">
+        <h2 class="track__title" id="guest-title" data-testid="guest-track-title">Waiting for host…</h2>
+        <p class="track__meta" id="guest-sub" data-testid="guest-track-sub">Connecting to room</p>
+      </div>
+
+      <div class="seek seek--readonly">
+        <span class="seek__time" id="guest-cur">0:00</span>
+        <div class="clay-progress"><div class="clay-progress__fill" id="guest-progress"></div></div>
+        <span class="seek__time" id="guest-dur">0:00</span>
+      </div>
+
+      <div class="guest-state" id="guest-playstate" data-testid="guest-playstate">
+        <span class="guest-state__dot"></span><span id="guest-playstate-text">Idle</span>
+      </div>
+
+      <div class="clay-card status-card">
+        <div class="status-row">
+          <span class="status-row__k">Connection</span>
+          <span class="status-row__v badge" id="guest-conn" data-testid="guest-connection-status">Connecting…</span>
+        </div>
+        <div class="status-row">
+          <span class="status-row__k">Sync error</span>
+          <span class="status-row__v" id="guest-err" data-testid="guest-sync-error">—</span>
+        </div>
+        <div class="status-row">
+          <span class="status-row__k">Buffer</span>
+          <span class="status-row__v" id="guest-buffer" data-testid="guest-buffer">0%</span>
+        </div>
+        <div class="status-row">
+          <span class="status-row__k">RTT</span>
+          <span class="status-row__v" id="guest-rtt" data-testid="guest-rtt">—</span>
+        </div>
+      </div>
+      <div class="guest-vol">
+        <span class="vol__icon">Vol</span>
+        <input type="range" class="clay-range clay-range--sm" id="guest-vol" min="0" max="100" value="100" data-testid="guest-volume" />
+      </div>
+    </section>
+
+  </div>
+
+  <div class="toast" id="toast" data-testid="toast" hidden></div>
+
+  <!-- Calibration / warm-up -->
+  <div class="calib" id="calibration" data-testid="calibration" hidden>
+    <div class="calib__orb"><div class="calib__pulse"><span></span><span></span><span></span></div></div>
+    <h2 class="calib__title" id="calib-title">Calibrating sync</h2>
+    <ul class="calib__steps" id="calib-steps"></ul>
+    <div class="calib__metric" id="calib-metric" data-testid="calib-metric">Measuring latency…</div>
+  </div>
+
+  <!-- Support me -->
+  <button class="support-fab" id="support-fab" data-testid="support-fab" aria-label="Support me">
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+    <span>Support</span>
+  </button>
+
+  <div class="support-overlay" id="support-overlay" data-testid="support-overlay" hidden>
+    <div class="support-modal clay-card" role="dialog" aria-modal="true" aria-label="Support WaveSync">
+      <button class="support-close" id="support-close" data-testid="support-close" aria-label="Close">✕</button>
+      <h3 class="support-title">Support WaveSync</h3>
+      <p class="support-sub">Made with ♥ by Dharshan S. If WaveSync helped you, a small tip keeps it free &amp; open-source.</p>
+
+      <div class="support-upi">
+        <div class="support-qr">
+          <img src="./assets/upi-qr.png" alt="Scan to pay via UPI" data-testid="support-qr" />
+        </div>
+        <div class="support-upi__info">
+          <span class="support-upi__label">UPI ID</span>
+          <span class="support-upi__id" data-testid="support-upi-id">dharshandcu@nyes</span>
+          <span class="support-upi__name">Dharshan S</span>
+          <div class="support-upi__actions">
+            <button class="support-btn support-btn--primary" id="support-copy" data-testid="support-copy-upi">Copy UPI ID</button>
+            <a class="support-btn" href="upi://pay?pa=dharshandcu@nyes&amp;pn=Dharshan%20S&amp;cu=INR" data-testid="support-pay">Pay via UPI app</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="support-links">
+        <a class="support-link" href="https://instagram.com/dharshandcu" target="_blank" rel="noopener" data-testid="support-instagram">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="5.5"/><circle cx="12" cy="12" r="4"/><circle cx="17.6" cy="6.4" r="1.2" fill="currentColor" stroke="none"/></svg>
+          Instagram
+        </a>
+        <a class="support-link" href="https://github.com/DharshanS-code/WaveSync" target="_blank" rel="noopener" data-testid="support-github">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17 4.6 18 4.9 18 4.9c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
