@@ -15,6 +15,8 @@ export class AudioEngine {
     this.duration = 0;
     this.onEnded = null;
     this._corr = null;       // active deadbeat correction segment
+    this.normGain = 1;       // loudness-normalization gain
+    this._userVol = 1;       // user volume 0..1
   }
 
   _ensure() {
@@ -33,16 +35,45 @@ export class AudioEngine {
 
   async decode(arrayBuffer) {
     this._ensure();
-    // decodeAudioData consumes the buffer; pass a copy so callers can reuse it.
-    this.buffer = await this.ctx.decodeAudioData(arrayBuffer.slice(0));
-    this.duration = this.buffer.duration;
+    const buf = await this.ctx.decodeAudioData(arrayBuffer.slice(0));
+    this._setActiveBuffer(buf);
     return this.duration;
   }
 
+  // Decode without swapping the active buffer (used to preload queued tracks).
+  async decodeToBuffer(arrayBuffer) {
+    this._ensure();
+    return this.ctx.decodeAudioData(arrayBuffer.slice(0));
+  }
+
+  setBuffer(buf) { this._setActiveBuffer(buf); }
+
+  _setActiveBuffer(buf) {
+    this.buffer = buf;
+    this.duration = buf ? buf.duration : 0;
+    this.normGain = buf ? this._computeNorm(buf) : 1;
+    this._applyGain();
+  }
+
+  // Loudness (RMS) normalization so louder tracks/devices don't dominate.
+  _computeNorm(buf, target = 0.14) {
+    let sum = 0, n = 0;
+    const step = Math.max(1, Math.floor(buf.length / 40000));
+    for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+      const d = buf.getChannelData(ch);
+      for (let i = 0; i < d.length; i += step) { sum += d[i] * d[i]; n++; }
+    }
+    const rms = Math.sqrt(sum / Math.max(1, n));
+    const g = rms > 1e-4 ? target / rms : 1;
+    return Math.min(4, Math.max(0.25, g));
+  }
+
+  _applyGain() { if (this.gain) this.gain.gain.value = Math.max(0, Math.min(1, this._userVol)) * this.normGain; }
+
   hasAudio() { return !!this.buffer; }
 
-  setVolume(v) { this._ensure(); this.gain.gain.value = Math.max(0, Math.min(1, v)); }
-  get volume() { return this.gain ? this.gain.gain.value : 1; }
+  setVolume(v) { this._ensure(); this._userVol = Math.max(0, Math.min(1, v)); this._applyGain(); }
+  get volume() { return this._userVol; }
 
   get playing() { return this._playing; }
   get rate() { return this._rate; }

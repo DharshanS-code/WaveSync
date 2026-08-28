@@ -21,8 +21,12 @@ class WaveSync {
     this.seq = 0;             // host timeline sequence
     this.hbTimer = null;      // host heartbeat
     this.tickTimer = null;    // ui tick
-    this.fileBuffer = null;   // host: raw file bytes for transfer
+    this.fileBuffer = null;   // host: raw bytes of the current track
     this.fileMeta = null;
+    this.queue = [];          // host: [{ file, name, mime }]
+    this.qIndex = 0;
+    this.gbuffers = {};        // guest: decoded AudioBuffers by track index
+    this.activeIndex = 0;
     this._bind();
     this._autoJoin();
     this._registerSW();
@@ -44,7 +48,9 @@ class WaveSync {
     document.getElementById('join-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.joinRoom(); });
 
     // Host controls
-    document.getElementById('host-file').addEventListener('change', (e) => this.onFile(e.target.files[0]));
+    document.getElementById('host-file').addEventListener('change', (e) => this.onFiles(e.target.files));
+    document.getElementById('host-prev').onclick = () => this.prevTrack();
+    document.getElementById('host-next').onclick = () => this.nextTrack();
     document.getElementById('host-play').onclick = () => this.togglePlay();
     document.getElementById('host-seek').addEventListener('input', (e) => this.onSeek(e.target.value));
     document.getElementById('host-vol').addEventListener('input', (e) => this.audio.setVolume(e.target.value / 100));
@@ -203,17 +209,17 @@ class WaveSync {
 
   _wireHost() {
     const s = this.signal;
+    this.audio.onEnded = () => this._onTrackEnd();
     s.addEventListener('created', (e) => { this.ui.set('host-code', e.detail.code); this._calibProgress('created'); });
 
-    // When a guest's datachannel opens, push current track + timeline.
+    // When a guest's datachannel opens, push the current track + timeline.
     this.peers.addEventListener('dc-open', (e) => {
       this._updateDeviceCount();
       const peer = e.detail.peer;
-      if (this.fileMeta) {
-        peer.dc.send(JSON.stringify({ kind: 'file-header', name: this.fileMeta.name, mime: this.fileMeta.mime, size: this.fileBuffer.byteLength }));
+      if (this.fileBuffer && this.fileMeta) {
         peer.sendFile(this.fileBuffer, this.fileMeta);
+        this.signal.control({ kind: 'track', index: this.qIndex, name: this.fileMeta.name, duration: this.fileMeta.duration, count: this.queue.length });
       }
-      this._broadcastMeta();
       this._broadcastTimeline();
     });
     this.peers.addEventListener('roster', () => this._updateDeviceCount());
@@ -222,28 +228,67 @@ class WaveSync {
     this._startUiTick();
   }
 
-  async onFile(file) {
-    if (!file) return;
+  onFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    this.queue = files.map((f) => ({ file: f, name: f.name.replace(/\.[^.]+$/, ''), mime: f.type || 'audio/mpeg' }));
+    this.qIndex = 0;
+    this._renderQueue();
+    this.loadTrack(0, false);
+  }
+
+  async loadTrack(i, autoplay) {
+    if (i < 0 || i >= this.queue.length) return;
+    this.qIndex = i;
+    const item = this.queue[i];
     this.ui.set('host-sub', 'Decoding…');
     try {
       await this.audio.resume();
-      const ab = await file.arrayBuffer();
+      const ab = await item.file.arrayBuffer();
       this.fileBuffer = ab.slice(0);
       const dur = await this.audio.decode(ab);
-      this.fileMeta = { name: file.name.replace(/\.[^.]+$/, ''), fileName: file.name, mime: file.type || 'audio/mpeg', duration: dur };
+      this.fileMeta = { name: item.name, mime: item.mime, duration: dur, index: i };
       document.getElementById('host-play').disabled = false;
-      this.ui.set('host-title', this.fileMeta.name);
-      this.ui.set('host-sub', 'Ready to play');
+      this.ui.set('host-title', item.name);
+      this.ui.set('host-sub', `Track ${i + 1} of ${this.queue.length}`);
       this.ui.set('host-dur', fmtTime(dur));
-      this._setMediaSession(this.fileMeta.name);
-      // Send to any already-connected guests.
+      this._renderQueue();
+      this._setMediaSession(item.name);
       this.peers.broadcastFile(this.fileBuffer, this.fileMeta);
-      this._broadcastMeta();
+      this.signal.control({ kind: 'track', index: i, name: item.name, duration: dur, count: this.queue.length });
+      if (autoplay) { this.audio.play(0); this._syncPlayIcon(); this.ui.setDisc('host', true); }
       this._broadcastTimeline();
+      this._preloadNext(i + 1);
     } catch (err) {
-      this.ui.set('host-sub', 'Unsupported / corrupt file');
-      this.ui.toast('Could not decode this audio file');
+      this.ui.set('host-sub', 'Unsupported / corrupt track');
+      this.ui.toast('Could not decode this track');
     }
+  }
+
+  // Transfer the next queued track ahead of time for near-gapless handoff.
+  async _preloadNext(i) {
+    if (i < 0 || i >= this.queue.length) return;
+    try {
+      const ab = await this.queue[i].file.arrayBuffer();
+      this.peers.broadcastFile(ab, { name: this.queue[i].name, mime: this.queue[i].mime, index: i });
+    } catch (e) {}
+  }
+
+  _onTrackEnd() {
+    if (this.role !== 'host') return;
+    if (this.qIndex + 1 < this.queue.length) this.loadTrack(this.qIndex + 1, true);
+    else { this._syncPlayIcon(); this.ui.setDisc('host', false); this._broadcastTimeline(); }
+  }
+
+  nextTrack() { const p = this.audio.playing; if (this.qIndex + 1 < this.queue.length) this.loadTrack(this.qIndex + 1, p); }
+  prevTrack() { const p = this.audio.playing; if (this.qIndex > 0) this.loadTrack(this.qIndex - 1, p); }
+
+  _renderQueue() {
+    const el = document.getElementById('host-queue');
+    if (!el) return;
+    el.innerHTML = this.queue.map((q, idx) =>
+      `<li class="queue-item ${idx === this.qIndex ? 'is-current' : ''}" data-idx="${idx}" data-testid="queue-item-${idx}"><span class="queue-item__n">${idx + 1}</span><span class="queue-item__name">${q.name}</span></li>`).join('');
+    el.querySelectorAll('.queue-item').forEach((li) => { li.onclick = () => this.loadTrack(Number(li.dataset.idx), this.audio.playing); });
   }
 
   togglePlay() {
@@ -331,33 +376,43 @@ class WaveSync {
       this.ui.set('guest-sub', 'Receiving audio…');
     });
     this.peers.addEventListener('file-progress', (e) => {
-      this.ui.set('guest-buffer', Math.round(e.detail.ratio * 100) + '%');
+      if (e.detail.index === this.activeIndex) this.ui.set('guest-buffer', Math.round(e.detail.ratio * 100) + '%');
     });
     this.peers.addEventListener('file-done', async (e) => {
+      const idx = e.detail.meta.index != null ? e.detail.meta.index : 0;
       try {
         await this.audio.resume();
-        await this.audio.decode(e.detail.buffer);
-        this.ui.set('guest-buffer', '100%');
-        this.ui.set('guest-dur', fmtTime(this.audio.duration));
-        this.ui.set('guest-sub', 'Ready · syncing');
-        this.sync.start();
-        if (this.sync.timeline) this.sync.setTimeline(this.sync.timeline);
-        this._setMediaSession(this.fileMeta ? this.fileMeta.name : 'WaveSync');
-      } catch (err) {
-        this.ui.set('guest-sub', 'Decode failed');
-      }
+        this.gbuffers[idx] = await this.audio.decodeToBuffer(e.detail.buffer);
+        if (idx === this.activeIndex) this._activateGuestTrack(idx);
+      } catch (err) { this.ui.set('guest-sub', 'Decode failed'); }
     });
 
     this._startUiTick();
   }
 
+  _activateGuestTrack(idx) {
+    const buf = this.gbuffers[idx];
+    if (!buf) { this.ui.set('guest-sub', 'Receiving audio…'); return; }
+    this.audio.setBuffer(buf);
+    this.ui.set('guest-buffer', '100%');
+    this.ui.set('guest-dur', fmtTime(this.audio.duration));
+    this.ui.set('guest-sub', 'Ready · syncing');
+    if (!this.sync.scheduler.running) this.sync.start();
+    else if (this.sync.timeline) this.sync.setTimeline(this.sync.timeline);
+    this._setMediaSession(this.fileMeta ? this.fileMeta.name : 'WaveSync');
+  }
+
   _onControl(m) {
     const d = m.data;
     if (!d) return;
-    if (d.kind === 'meta') {
-      this.fileMeta = { name: d.name, duration: d.duration };
+    if (d.kind === 'track') {
+      this.activeIndex = d.index || 0;
+      this.fileMeta = { name: d.name, duration: d.duration, index: this.activeIndex };
       this.ui.set('guest-title', d.name);
       this.ui.set('guest-dur', fmtTime(d.duration));
+      if (d.count) this.ui.set('guest-sub', `Track ${this.activeIndex + 1} of ${d.count}`);
+      if (this.gbuffers[this.activeIndex]) this._activateGuestTrack(this.activeIndex);
+      else { this.ui.set('guest-sub', 'Receiving audio…'); this.ui.set('guest-buffer', '0%'); }
     } else if (d.kind === 'timeline') {
       const tl = { playing: d.playing, position: d.position, atServerTime: d.atServerTime, seq: d.seq };
       if (this.sync) this.sync.setTimeline(tl);
@@ -446,6 +501,8 @@ class WaveSync {
     this.signal = this.peers = this.sync = null;
     this.role = this.code = null;
     this.fileBuffer = this.fileMeta = null;
+    this.queue = []; this.qIndex = 0; this.gbuffers = {}; this.activeIndex = 0;
+    if (this.audio) this.audio.onEnded = null;
     this.ui.connDot('off');
     this.ui.show('home');
     history.replaceState(null, '', location.pathname);

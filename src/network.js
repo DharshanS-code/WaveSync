@@ -169,11 +169,11 @@ class Peer {
     if (typeof data === 'string') {
       let msg; try { msg = JSON.parse(data); } catch { return; }
       if (msg.kind === 'file-header') {
-        this._recv = { name: msg.name, mime: msg.mime, size: msg.size, received: 0, chunks: [] };
+        this._recv = { name: msg.name, mime: msg.mime, size: msg.size, index: msg.index || 0, received: 0, chunks: [] };
         this.mgr.emit('file-start', { id: this.id, meta: msg });
       } else if (msg.kind === 'file-eof' && this._recv) {
         const blob = new Blob(this._recv.chunks, { type: this._recv.mime });
-        const meta = { name: this._recv.name, mime: this._recv.mime, size: this._recv.size };
+        const meta = { name: this._recv.name, mime: this._recv.mime, size: this._recv.size, index: this._recv.index };
         this._recv = null;
         blob.arrayBuffer().then((ab) => this.mgr.emit('file-done', { id: this.id, buffer: ab, meta }));
       }
@@ -185,6 +185,7 @@ class Peer {
       this._recv.received += data.byteLength;
       this.mgr.emit('file-progress', {
         id: this.id,
+        index: this._recv.index,
         received: this._recv.received,
         size: this._recv.size,
         ratio: this._recv.size ? this._recv.received / this._recv.size : 0
@@ -209,7 +210,7 @@ class Peer {
   async sendFile(arrayBuffer, meta) {
     if (!this.dc || this.dc.readyState !== 'open') return;
     const chunk = this.mgr.cfg.chunkSize;
-    this.dc.send(JSON.stringify({ kind: 'file-header', name: meta.name, mime: meta.mime, size: arrayBuffer.byteLength }));
+    this.dc.send(JSON.stringify({ kind: 'file-header', name: meta.name, mime: meta.mime, size: arrayBuffer.byteLength, index: meta.index != null ? meta.index : 0 }));
     const view = new Uint8Array(arrayBuffer);
     for (let off = 0; off < view.byteLength; off += chunk) {
       if (this.dc.readyState !== 'open') return;

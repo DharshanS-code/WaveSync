@@ -29,16 +29,16 @@ export const CONFIG = {
 
   // Timeline / drift correction
   timelineHeartbeatMs: 2000,
-  syncCheckMs: 100,
+  syncCheckMs: 1000,
   softThresholdSec: 0.02,
   hardThresholdSec: 0.25,
-  maxRateAdjust: 0.04,
+  maxRateAdjust: 0.02,
   driftKp: 0.9,
   driftKi: 0.05,
   scheduleLeadSec: 0.02,
-  holdToleranceSec: 0.004,   // dead-band around 0: don't correct within ±4ms
-  convergeSec: 0.8,          // target time to drive error to exactly 0
-  minCorrectionSec: 0.08,    // shortest correction window
+  holdToleranceSec: 0.006,   // dead-band around 0: don't correct within ±6ms
+  convergeSec: 1.2,          // gentle: drive error to exactly 0 over ~1.2s (no pitch distortion)
+  minCorrectionSec: 0.1,     // shortest correction window
 
   // Calibration
   calibMinSamples: 5,
