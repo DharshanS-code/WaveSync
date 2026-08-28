@@ -88,17 +88,21 @@
 
       <div class="transport">
         <label class="clay-btn clay-btn--ghost file-pick" data-testid="host-pick-file">
-          <input type="file" id="host-file" accept="audio/*,.mp3,.aac,.wav,.ogg,.opus,.flac,.m4a" hidden />
-          <span>Choose file</span>
+          <input type="file" id="host-file" accept="audio/*,.mp3,.aac,.wav,.ogg,.opus,.flac,.m4a" multiple hidden />
+          <span>Add songs</span>
         </label>
+        <button class="icon-btn" id="host-prev" data-testid="host-prev-btn" title="Previous">Prev</button>
         <button class="play-btn" id="host-play" data-testid="host-play-btn" disabled>
           <span class="play-btn__icon" id="host-play-icon">Play</span>
         </button>
+        <button class="icon-btn" id="host-next" data-testid="host-next-btn" title="Next">Next</button>
         <div class="vol">
           <span class="vol__icon">Vol</span>
           <input type="range" class="clay-range clay-range--sm" id="host-vol" min="0" max="100" value="100" data-testid="host-volume" />
         </div>
       </div>
+
+      <ul class="queue" id="host-queue" data-testid="host-queue"></ul>
 
       <div class="clay-card status-card">
         <div class="status-row">
