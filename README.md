@@ -2,7 +2,7 @@
 
 **Play one song in perfect sync across every device on your network.**
 
-WaveSync is an open-source, mobile-first **PWA**. A host picks a track from their
+WaveSync is an open-source, mobile-first **PWA**. A host picks tracks from their
 device, WaveSync streams the audio **peer-to-peer over WebRTC** to every guest,
 and a dedicated **synchronization engine** keeps all devices locked to a shared
 GMT/UTC clock with sub-100 ms accuracy.
@@ -14,12 +14,15 @@ GMT/UTC clock with sub-100 ms accuracy.
 
 ## ✨ Features
 
-- 🎵 **Local audio** — host selects MP3 / AAC / WAV / OGG-Opus / FLAC (browser-supported).
+- 🎵 **Local audio, with a queue** — host selects one or more MP3 / AAC / WAV / OGG-Opus / FLAC files (browser-supported), builds a queue, and skips prev/next. The next queued track is transferred to guests ahead of time for a near-gapless handoff.
 - 📡 **P2P audio transfer** — audio travels host→guests over WebRTC DataChannels; it never touches a server.
-- ⏱️ **Sync engine** — host-authoritative timeline, NTP-style shared clock, RTT/offset estimation, drift detection, **0.1 s adaptive checks**, smooth rate correction + hard reseek.
-- 🚪 **Rooms** — create/join, short code, shareable link, host/guest roles, live device count, host playback control, leave, auto-reconnect.
-- 📱 **PWA** — `manifest.json`, service worker, installable, offline app shell, responsive, Media Session API.
+- ⏱️ **Sync engine** — host-authoritative timeline, NTP-style shared clock (Kalman-filtered offset), RTT/jitter tracking, periodic drift checks, smooth rate correction (±2% playback rate) with hysteresis-gated hard reseek for gross errors.
+- 🚪 **Rooms** — create/join, short code, shareable link, host/guest roles, live device count, host playback control, leave, auto-reconnect with backoff.
+- 🧊 **Calibration screen** — before playback starts, both host and guest see a live step-by-step readout (linking → clock sync → lock) with RTT/offset/confidence, so you know sync is actually solid before the music starts.
+- 📱 **PWA** — `manifest.json`, service worker, installable, offline app shell, responsive, Media Session API (lock-screen play/pause + track title on the host).
+- 🔊 **Loudness normalization** — each decoded track is RMS-analyzed and gain-adjusted so volume stays consistent across different source files.
 - 🧊 **Claymorphism UI** — soft rounded surfaces, depth, lightweight animations, touch-friendly.
+- 💚 **Support card** — an in-app "Support" panel (UPI QR + links) for anyone who wants to tip the project; entirely optional and dismissible.
 - 🔒 **Secure** — random unambiguous room codes, host-only control authorization, input validation, HTTPS/WSS ready.
 
 ---
@@ -28,25 +31,25 @@ GMT/UTC clock with sub-100 ms accuracy.
 
 ```
 WaveSync/
-├── index.html            # app shell
+├── index.html            # app shell (home, host player, guest player, calibration, support card)
 ├── manifest.json         # PWA manifest
 ├── sw.js                 # service worker (offline shell)
 ├── package.json
-├── assets/               # PWA icons
+├── assets/                # PWA icons + support QR
 ├── src/
-│   ├── config.js         # signaling URL + sync tuning
-│   ├── app.js            # orchestrator (host + guest)
-│   ├── audio-engine.js   # Web Audio decode + scheduled playback
-│   ├── sync-engine.js    # ClockSync + SyncController (drift control)
-│   ├── network.js        # signaling client + WebRTC peer mesh
-│   ├── ui.js             # DOM helpers
-│   └── styles.css        # claymorphism theme
+│   ├── config.js          # signaling URL + sync tuning
+│   ├── app.js              # orchestrator (host + guest, queue, calibration, UI wiring)
+│   ├── audio-engine.js     # Web Audio decode + scheduled playback + loudness normalization
+│   ├── sync-engine.js      # ClockSynchronizer + SyncEngine (Kalman filter, drift control)
+│   ├── network.js          # signaling client + WebRTC peer mesh + file transfer
+│   ├── ui.js                # DOM helpers
+│   └── styles.css           # claymorphism theme
 ├── backend/
-│   ├── worker.js         # Cloudflare Worker + Durable Object (RoomDO)
-│   ├── dev-server.js     # Node dev signaling server (local testing)
-│   ├── wrangler.toml     # Cloudflare deploy config
+│   ├── worker.js            # Cloudflare Worker + Durable Object (RoomDO)
+│   ├── dev-server.js        # Node dev signaling server (local testing)
+│   ├── wrangler.toml        # Cloudflare deploy config
 │   └── package.json
-├── LICENSE               # MIT
+├── LICENSE                  # MIT
 └── README.md
 ```
 
@@ -70,7 +73,7 @@ npm run serve
 
 Open **http://localhost:3000** on your phone/laptop.
 
-- **Create Room** → pick an audio file → press play.
+- **Create Room** → pick one or more audio files → press play. Use prev/next to move through the queue.
 - On another device (same network) open the shared link or enter the room code → **Join Room**.
 
 > **Testing on multiple physical devices?** They must reach the signaling
@@ -127,17 +130,17 @@ from the same Worker origin.
 
 1. **Shared clock.** Every client runs an NTP-style exchange with the signaling
    server (`t0` sent, server replies with `t1`, client stamps `t2`). Offset =
-   `t1 − (t0+t2)/2`; the lowest-RTT sample wins. `clock.now()` = a shared GMT
-   estimate on all devices.
-2. **Host-authoritative timeline.** On every play/pause/seek (plus a 2 s
-   heartbeat) the host broadcasts `{ playing, position, atServerTime, seq }`.
+   `t1 − (t0+t2)/2`; the lowest-RTT sample wins, fused over time by a Kalman
+   filter. `clock.now()` = a shared GMT estimate on all devices.
+2. **Host-authoritative timeline.** On every play/pause/seek/track-change (plus
+   a 2 s heartbeat) the host broadcasts `{ playing, position, atServerTime, seq }`.
 3. **Guest scheduling.** Guests decode the transferred audio locally and play it
    via `AudioBufferSourceNode` — sample-accurate and immune to timer jitter.
    `expectedPosition = position + (clock.now() − atServerTime)`.
-4. **Drift control (every 0.1 s).** `error = localPosition − expectedPosition`.
-   - `|error| < 20 ms` → do nothing.
-   - `20 ms–250 ms` → smoothly nudge `playbackRate` (±4%) to converge.
-   - `> 250 ms` → hard reseek to the exact position.
+4. **Drift control (checked every 1 s).** `error = heardPosition − expectedPosition`.
+   - `|error| ≤ 6 ms` → hold, do nothing.
+   - `6 ms – 250 ms` → smoothly nudge `playbackRate` (±2%, converging over ~1.2 s) to drive the error to exactly 0.
+   - `> 250 ms`, confirmed over two consecutive checks (debounced against transient jitter) → hard reseek to the exact position.
 
 Audio bytes move **peer-to-peer** over WebRTC DataChannels; the server only
 relays tiny signaling/clock/control messages.
@@ -148,16 +151,18 @@ relays tiny signaling/clock/control messages.
 
 | Capability | Where |
 |---|---|
-| Local audio selection | `app.js › onFile` |
-| Audio playback | `audio-engine.js` |
+| Local audio selection + queue | `app.js › onFiles / loadTrack / nextTrack / prevTrack` |
+| Audio playback + loudness normalization | `audio-engine.js` |
 | Room creation / joining | `app.js`, `worker.js`, `dev-server.js` |
 | WebRTC connection | `network.js › Peer` |
 | Live audio transmission (P2P) | `network.js › sendFile / DataChannel` |
-| Playback synchronization | `sync-engine.js › SyncController` |
-| Clock synchronization | `sync-engine.js › ClockSync` |
-| Drift correction | `SyncController._tick` |
+| Playback synchronization | `sync-engine.js › SyncEngine` |
+| Clock synchronization | `sync-engine.js › ClockSynchronizer` |
+| Drift correction | `SyncEngine._monitor` |
 | Buffering | progressive DataChannel transfer + `guest-buffer` UI |
 | Reconnection | `network.js › SignalClient` backoff |
+| Calibration UX | `app.js › _startCalibration / _calibProgress` |
+| Media Session (lock-screen controls) | `app.js › _setMediaSession` |
 | PWA installation | `manifest.json`, `sw.js` |
 | Responsive UI | `styles.css` |
 | Build integrity | pure ES modules, no build step |
