@@ -2,6 +2,8 @@
 // Shared by host and guest. Position is derived from AudioContext.currentTime
 // so it is immune to setInterval/timer jitter.
 
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
 export class AudioEngine {
   constructor() {
     this.ctx = null;
@@ -14,10 +16,14 @@ export class AudioEngine {
     this._playing = false;
     this.duration = 0;
     this.onEnded = null;
-    this._corr = null;       // active deadbeat correction segment
+    this._corr = null;       // active deadbeat correction segment (trapezoid shape)
+    this._rampSec = 0.03;    // ramp-in/out time for corrections (smooths the pitch transition)
     this.normGain = 1;       // loudness-normalization gain
     this._userVol = 1;       // user volume 0..1
   }
+
+  /** Configure how long a correction's rate ramps in/out (seconds). */
+  setCorrectionRamp(sec) { this._rampSec = Math.max(0, sec || 0); }
 
   _ensure() {
     if (!this.ctx) {
@@ -91,17 +97,20 @@ export class AudioEngine {
   _clampPos(p) { return Math.max(0, Math.min(this.duration, p)); }
 
   // Scheduled playback position (s), accounting for an in-flight deadbeat
-  // correction segment (piecewise-constant rate). Lazily collapses a finished
-  // correction back into the steady rate-1 model.
+  // correction segment. The correction is a trapezoid (ramp-in / hold /
+  // ramp-out) rather than a rectangular step, so this integrates the actual
+  // rate curve rather than assuming a constant rate during the correction.
+  // Lazily collapses a finished correction back into the steady rate-1 model.
   position() {
     if (!this.buffer) return 0;
     if (!this._playing) return this._startOffset;
     const t = this.ctx.currentTime;
     const c = this._corr;
     if (c) {
-      if (t <= c.t0) return this._clampPos(c.pos0);
-      if (t < c.t0 + c.dur) return this._clampPos(c.pos0 + c.rate * (t - c.t0));
-      const endPos = c.pos0 + c.rate * c.dur;   // correction finished
+      const tau = t - c.t0;
+      if (tau <= 0) return this._clampPos(c.pos0);
+      if (tau < c.dur) return this._clampPos(c.pos0 + this._corrDistance(c, tau));
+      const endPos = c.pos0 + this._corrDistance(c, c.dur);  // correction finished
       this._startCtx = c.t0 + c.dur;
       this._startOffset = endPos;
       this._rate = 1;
@@ -109,6 +118,25 @@ export class AudioEngine {
       return this._clampPos(endPos + (t - this._startCtx));
     }
     return this._clampPos(this._startOffset + (t - this._startCtx) * this._rate);
+  }
+
+  // Distance traveled `tau` seconds into a trapezoid correction segment c
+  // ({ up, rampT, holdT }): rate ramps linearly 1 -> 1+up over rampT, holds
+  // at 1+up for holdT, then ramps linearly back down to 1 over rampT. This
+  // is the exact integral of that piecewise-linear rate curve.
+  _corrDistance(c, tau) {
+    const { up, rampT, holdT } = c;
+    if (rampT <= 1e-9) return (1 + up) * tau; // degenerate: no ramp, pure rectangle
+    if (tau <= rampT) {
+      return tau + (up * tau * tau) / (2 * rampT);
+    }
+    const distRampIn = rampT + (up * rampT) / 2;
+    if (tau <= rampT + holdT) {
+      return distRampIn + (1 + up) * (tau - rampT);
+    }
+    const distHold = distRampIn + (1 + up) * holdT;
+    const s = tau - rampT - holdT; // time into the ramp-out, in [0, rampT]
+    return distHold + (1 + up) * s - (up * s * s) / (2 * rampT);
   }
 
   _newSource() {
@@ -151,21 +179,36 @@ export class AudioEngine {
     this._corr = null;
   }
 
-  // Deadbeat correction: run at rate (1+u) and return to exactly 1 after
-  // `duration` seconds, scheduled sample-accurately on the AudioParam so the
-  // error crosses 0 precisely at t0+duration and then stays put.
+  // Deadbeat correction: ramp smoothly to rate (1+u), hold, then ramp back to
+  // exactly 1 after `duration` seconds — scheduled sample-accurately on the
+  // AudioParam so the error crosses 0 precisely at t0+duration and stays put.
+  // Shaped as a trapezoid (not a rectangular step) so there is no instant
+  // pitch jump at the start/end of a correction — that discontinuity was the
+  // actual source of the audible "flutter" on every correction.
   scheduleCorrection(u, duration) {
     if (!this.source || !this._playing || !(duration > 0)) return;
     const now = this.ctx.currentTime;
     const pos0 = this.position();            // snapshot (collapses any prior corr)
-    const rate = 1 + u;
+
+    const rampT = Math.min(this._rampSec, duration / 2);
+    const holdT = Math.max(0, duration - 2 * rampT);
+    // A trapezoid covers less area than a rectangle of the same peak height
+    // (the ramps are triangular, not full-height) — compensate the peak so
+    // the total corrected distance still equals u*duration exactly, matching
+    // what the deadbeat controller computed to close the current error.
+    const areaFactor = duration - rampT;
+    const up = areaFactor > 1e-6 ? clamp(u * duration / areaFactor, -0.5, 0.5) : u;
+    const peakRate = 1 + up;
+
     const pr = this.source.playbackRate;
     try {
       pr.cancelScheduledValues(now);
-      pr.setValueAtTime(rate, now);
-      pr.setValueAtTime(1, now + duration);  // exact, sample-accurate drop to 1
+      pr.setValueAtTime(1, now);
+      pr.linearRampToValueAtTime(peakRate, now + rampT);
+      if (holdT > 0) pr.setValueAtTime(peakRate, now + rampT + holdT);
+      pr.linearRampToValueAtTime(1, now + duration);  // exact, sample-accurate return to 1
     } catch (e) {}
-    this._corr = { t0: now, pos0, rate, dur: duration };
+    this._corr = { t0: now, pos0, up, rampT, holdT, dur: duration };
     this._rate = 1;                          // steady rate resumes after the window
   }
 

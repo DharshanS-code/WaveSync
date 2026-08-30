@@ -41,72 +41,133 @@ const median = (a) => {
 };
 
 /**
- * KalmanOffsetFilter — 1-D Kalman filter that fuses noisy clock-offset
- * measurements into a smooth, low-variance estimate. Measurement variance is
- * derived from RTT so high-latency samples are trusted less.
+ * ClockDriftKalman — 2-state Kalman filter tracking [offset, driftRate].
+ * A phone's clock isn't just off by a fixed amount from the server — it
+ * runs fast or slow by some roughly-constant rate (tens of ppm, different
+ * per device). Modeling that rate as a second state lets the filter
+ * extrapolate accurately BETWEEN samples instead of only ever trusting the
+ * last snapshot, which is what causes a plain offset filter to slowly
+ * re-drift over a long session even when every sample was fused correctly.
+ *
+ * State:    x = [offset (ms), rate (ms of drift per second elapsed)]
+ * Model:    offset(t+dt) = offset(t) + rate(t)*dt   (constant-rate model)
+ *           rate(t+dt)   = rate(t) + processNoise    (rate itself wanders slowly)
+ * This is the same state structure NTP/PTP clock-discipline algorithms use.
  */
-export class KalmanOffsetFilter {
-  constructor(processVar = 0.02) {
-    this.q = processVar;   // process noise (drift of the true offset)
-    this.x = 0;            // estimated offset
-    this.p = 1000;         // estimate covariance
+export class ClockDriftKalman {
+  constructor(processNoise = 1e-3) {
+    this.q = processNoise;  // process noise intensity (how fast the rate itself can wander)
+    this.x0 = 0;            // offset state (ms)
+    this.x1 = 0;            // rate state (ms/s)
+    this.p00 = 1e8; this.p01 = 0; this.p10 = 0; this.p11 = 1; // state covariance
     this.init = false;
   }
-  update(z, measVar) {
-    const r = Math.max(1, measVar);
-    if (!this.init) { this.x = z; this.p = r; this.init = true; return this.x; }
-    this.p += this.q;                     // predict
-    const k = this.p / (this.p + r);      // Kalman gain
-    this.x += k * (z - this.x);           // correct
-    this.p *= (1 - k);
-    return this.x;
+
+  /** Propagate the state dt seconds forward with no new measurement (F = [[1,dt],[0,1]]). */
+  _predict(dt) {
+    if (dt <= 0) return;
+    this.x0 = this.x0 + this.x1 * dt;
+    const p00 = this.p00 + dt * (this.p01 + this.p10) + dt * dt * this.p11;
+    const p01 = this.p01 + dt * this.p11;
+    const p10 = this.p10 + dt * this.p11;
+    const p11 = this.p11;
+    // Discretized white-noise-on-rate process model (standard clock-KF Q matrix).
+    this.p00 = p00 + (this.q * dt * dt * dt) / 3;
+    this.p01 = p01 + (this.q * dt * dt) / 2;
+    this.p10 = p10 + (this.q * dt * dt) / 2;
+    this.p11 = p11 + this.q * dt;
   }
-  get value() { return this.x; }
-  reset() { this.init = false; this.p = 1000; }
+
+  /** Fuse a new offset measurement (ms), variance measVar (ms^2), dt seconds after the last update. */
+  update(z, measVar, dt) {
+    const r = Math.max(1, measVar);
+    if (!this.init) {
+      this.x0 = z; this.x1 = 0;
+      this.p00 = r; this.p01 = 0; this.p10 = 0; this.p11 = 1;
+      this.init = true;
+      return;
+    }
+    this._predict(dt);
+    const y = z - this.x0;              // innovation (H = [1, 0])
+    const s = this.p00 + r;
+    const k0 = this.p00 / s, k1 = this.p10 / s;
+    this.x0 += k0 * y;
+    this.x1 += k1 * y;
+    const p00 = this.p00, p01 = this.p01, p10 = this.p10, p11 = this.p11;
+    this.p00 = p00 - k0 * p00;
+    this.p01 = p01 - k0 * p01;
+    this.p10 = p10 - k1 * p00;
+    this.p11 = p11 - k1 * p01;
+  }
+
+  /** Extrapolated offset `dt` seconds after the last update, without touching state. */
+  extrapolate(dt) { return this.x0 + this.x1 * Math.max(0, dt); }
+
+  reset() {
+    this.init = false; this.x0 = 0; this.x1 = 0;
+    this.p00 = 1e8; this.p01 = 0; this.p10 = 0; this.p11 = 1;
+  }
 }
 
 /**
  * ClockSynchronizer — estimates the offset between this device's wall clock
  * (Date.now) and the signaling server's shared GMT/UTC clock using NTP-style
- * round trips, with min-RTT anchoring, outlier rejection and EMA smoothing.
+ * round trips, with min-RTT anchoring, outlier rejection, and a 2-state
+ * Kalman filter that tracks offset AND drift-rate (see ClockDriftKalman).
  * Emits: 'sync' (first lock), 'update' (every sample).
  */
 export class ClockSynchronizer extends Emitter {
   constructor(cfg = {}) {
     super();
     this.window = cfg.clockWindow || 30;
-    this.alpha = cfg.clockEmaAlpha || 0.15;
-    this.offset = 0;        // serverClock - localClock (ms)
-    this.rtt = Infinity;    // best (lowest) round-trip time (ms)
-    this.jitter = 0;        // rtt standard deviation (ms)
-    this.confidence = 0;    // 0..1 quality score
+    this.rtt = Infinity;      // best-seen round-trip time in the current window (ms)
+    this.jitter = 0;          // rtt standard deviation (ms)
+    this.confidence = 0;      // 0..1 quality score
     this.synced = false;
-    this._samples = [];     // { rtt, offset }
+    this._rtts = [];          // rolling window of RTTs (ms), all samples incl. outliers
+    this._acceptedFlags = []; // parallel rolling window: 1 = fed to filter, 0 = rejected outlier
     this._minSamples = cfg.calibMinSamples || 5;
-    this.kalman = new KalmanOffsetFilter();
+    this._lastT = 0;          // local time (ms) of the last sample fed to the filter
+    this.kf = new ClockDriftKalman(cfg.clockProcessNoise || 1e-3);
   }
+
+  /** Live extrapolated offset (ms) — always current, not frozen at the last sample. */
+  get offset() {
+    if (!this.kf.init) return 0;
+    const dt = Math.max(0, (Date.now() - this._lastT) / 1000);
+    return this.kf.extrapolate(dt);
+  }
+
+  /** Estimated clock skew in parts-per-million, mostly for telemetry. */
+  get driftPpm() { return this.kf.init ? this.kf.x1 * 1000 : 0; }
 
   /** Ingest one round trip. t0 = send (local), t1 = server, t2 = recv (local). */
   addSample(t0, t1, t2) {
     const rtt = t2 - t0;
     if (rtt < 0 || !isFinite(rtt)) return this.quality();
     const rawOffset = t1 - (t0 + t2) / 2;
-    this._samples.push({ rtt, offset: rawOffset });
-    if (this._samples.length > this.window) this._samples.shift();
 
-    const rtts = this._samples.map((s) => s.rtt);
-    const med = median(rtts);
-    const kept = this._samples.filter((s) => s.rtt <= med * 2.5 + 5); // reject spikes
-    let best = kept[0];
-    for (const s of kept) if (s.rtt < best.rtt) best = s;
+    this._rtts.push(rtt);
+    if (this._rtts.length > this.window) this._rtts.shift();
+    const med = median(this._rtts);
+    const isOutlier = rtt > med * 2.5 + 5;   // reject spikes, same heuristic as before
 
-    const measVar = Math.max(1, (best.rtt * best.rtt) / 4); // trust low-RTT samples more
-    this.offset = this.kalman.update(best.offset, measVar);
-    if (!this.synced) { this.synced = true; this.emit('sync', this.quality()); }
+    this._acceptedFlags.push(isOutlier ? 0 : 1);
+    if (this._acceptedFlags.length > this.window) this._acceptedFlags.shift();
 
-    this.rtt = best.rtt;
-    this.jitter = stddev(rtts);
-    this.confidence = clamp(kept.length / this._minSamples, 0, 1) * clamp(1 - this.jitter / 150, 0, 1);
+    this.rtt = Math.min(...this._rtts);
+    this.jitter = stddev(this._rtts);
+
+    if (!isOutlier) {
+      const dt = this.kf.init ? clamp((t2 - this._lastT) / 1000, 0, 300) : 0;
+      const measVar = Math.max(1, (rtt * rtt) / 4); // trust low-RTT samples more
+      this.kf.update(rawOffset, measVar, dt);
+      this._lastT = t2;
+      if (!this.synced) { this.synced = true; this.emit('sync', this.quality()); }
+    }
+
+    const acceptedInWindow = this._acceptedFlags.reduce((a, b) => a + b, 0);
+    this.confidence = clamp(acceptedInWindow / this._minSamples, 0, 1) * clamp(1 - this.jitter / 150, 0, 1);
 
     const q = this.quality();
     this.emit('update', q);
@@ -118,12 +179,16 @@ export class ClockSynchronizer extends Emitter {
 
   quality() {
     return {
-      offset: this.offset, rtt: this.rtt, jitter: this.jitter,
-      confidence: this.confidence, samples: this._samples.length, synced: this.synced
+      offset: this.offset, rtt: this.rtt, jitter: this.jitter, confidence: this.confidence,
+      samples: this._rtts.length, synced: this.synced, driftPpm: this.driftPpm
     };
   }
 
-  reset() { this._samples = []; this.synced = false; this.confidence = 0; this.rtt = Infinity; }
+  reset() {
+    this._rtts = []; this._acceptedFlags = []; this.synced = false;
+    this.confidence = 0; this.rtt = Infinity; this.jitter = 0; this._lastT = 0;
+    this.kf.reset();
+  }
 }
 
 // Backward-compatible alias.
@@ -235,8 +300,9 @@ export class SyncHealth {
 /**
  * SyncEngine — guest-side orchestrator. Consumes the host-authoritative
  * timeline and the shared clock and continuously steers local playback to
- * match. Event-driven: reacts to clock/timeline updates and also runs a 0.1s
- * safety monitor. Emits: 'status', 'timeline', 'resync'.
+ * match. Event-driven: reacts to clock/timeline updates and also runs a
+ * periodic safety monitor (interval set by cfg.syncCheckMs).
+ * Emits: 'status', 'timeline', 'resync'.
  */
 export class SyncEngine extends Emitter {
   constructor(audio, clock, cfg) {
@@ -249,6 +315,7 @@ export class SyncEngine extends Emitter {
     this.latency = new LatencyEstimator();
     this.policy = new AdaptiveResyncPolicy(cfg);
     this.health = new SyncHealth();
+    this.audio.setCorrectionRamp(cfg.rateRampSec != null ? cfg.rateRampSec : 0.03);
     this.timeline = null;   // { playing, position, atServerTime, seq }
     this.state = 'idle';    // idle | armed | locked | correcting
     this.error = 0;
@@ -331,9 +398,18 @@ export class SyncEngine extends Emitter {
 
     const nowCtx = this.audio.ctx ? this.audio.ctx.currentTime : 0;
 
-    // Gross error (host seek / stall) overrides everything.
-    if (Math.abs(error) > this.cfg.hardThresholdSec && this.policy.shouldReseek(error)) {
+    // Policy is the single authority on hard reseeks: call it every tick (not
+    // only when already over threshold) so its streak correctly decays on
+    // small errors too. A brief spike over hardThresholdSec is debounced —
+    // we hold steady and re-check next tick rather than jumping immediately.
+    if (this.policy.shouldReseek(error)) {
       this._reseek(expected); this._report(); return;
+    }
+    if (Math.abs(error) > this.cfg.hardThresholdSec) {
+      // Gross but not yet confirmed by hysteresis — don't touch playback rate
+      // (a rate nudge can't fix a gross error anyway), just wait for the
+      // next tick's confirmation or decay.
+      this._report(); return;
     }
     // A deadbeat correction is in flight: let it converge to exactly 0 —
     // the drifter stays active but we do NOT change it at the zero instant.

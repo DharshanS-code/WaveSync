@@ -96,10 +96,11 @@
           <span class="play-btn__icon" id="host-play-icon">Play</span>
         </button>
         <button class="icon-btn" id="host-next" data-testid="host-next-btn" title="Next">Next</button>
-        <div class="vol">
-          <span class="vol__icon">Vol</span>
-          <input type="range" class="clay-range clay-range--sm" id="host-vol" min="0" max="100" value="100" data-testid="host-volume" />
-        </div>
+      </div>
+
+      <div class="vol" data-testid="host-vol-container">
+        <span class="vol__icon">Vol</span>
+        <input type="range" class="clay-range clay-range--sm" id="host-vol" min="0" max="100" value="100" data-testid="host-volume" />
       </div>
 
       <ul class="queue" id="host-queue" data-testid="host-queue"></ul>
@@ -148,6 +149,11 @@
         <span class="seek__time" id="guest-dur">0:00</span>
       </div>
 
+      <div class="guest-vol" data-testid="guest-vol-container">
+        <span class="vol__icon">Vol</span>
+        <input type="range" class="clay-range clay-range--sm" id="guest-vol" min="0" max="100" value="100" data-testid="guest-volume" />
+      </div>
+
       <div class="guest-state" id="guest-playstate" data-testid="guest-playstate">
         <span class="guest-state__dot"></span><span id="guest-playstate-text">Idle</span>
       </div>
@@ -169,10 +175,6 @@
           <span class="status-row__k">RTT</span>
           <span class="status-row__v" id="guest-rtt" data-testid="guest-rtt">—</span>
         </div>
-      </div>
-      <div class="guest-vol">
-        <span class="vol__icon">Vol</span>
-        <input type="range" class="clay-range clay-range--sm" id="guest-vol" min="0" max="100" value="100" data-testid="guest-volume" />
       </div>
     </section>
 

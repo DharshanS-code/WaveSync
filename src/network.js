@@ -133,6 +133,7 @@ class Peer {
     this.initiator = initiator;
     this.pc = new RTCPeerConnection({ iceServers: mgr.cfg.iceServers });
     this.dc = null;
+    this.dcFast = null;
     this._recv = null; // { name, mime, size, received, chunks[] }
     this.connected = false;
 
@@ -149,11 +150,36 @@ class Peer {
     if (initiator) {
       this.dc = this.pc.createDataChannel('wavesync', { ordered: true });
       this._wireChannel();
+      // Fast lane: unreliable + unordered, dedicated to timeline pings. A late
+      // or dropped timeline update is worthless anyway (a fresher one is on
+      // the way), so this trades reliability for the lowest possible latency
+      // — no retransmit queueing, no head-of-line blocking behind file bytes.
+      this.dcFast = this.pc.createDataChannel('wavesync-fast', { ordered: false, maxRetransmits: 0 });
+      this._wireFastChannel();
       this.pc.createOffer()
         .then((o) => this.pc.setLocalDescription(o))
         .then(() => mgr.signal.signal(remoteId, { sdp: this.pc.localDescription }));
     } else {
-      this.pc.ondatachannel = (e) => { this.dc = e.channel; this._wireChannel(); };
+      this.pc.ondatachannel = (e) => {
+        if (e.channel.label === 'wavesync-fast') { this.dcFast = e.channel; this._wireFastChannel(); }
+        else { this.dc = e.channel; this._wireChannel(); }
+      };
+    }
+  }
+
+  _wireFastChannel() {
+    this.dcFast.onmessage = (e) => {
+      if (typeof e.data !== 'string') return;
+      let msg; try { msg = JSON.parse(e.data); } catch { return; }
+      this.mgr.emit('timeline', { id: this.id, data: msg });
+    };
+  }
+
+  /** Send a timeline update over the fast lane. Silently no-ops if not open yet
+   *  (the reliable relay path covers that gap — see app.js _broadcastTimeline). */
+  sendTimeline(data) {
+    if (this.dcFast && this.dcFast.readyState === 'open') {
+      try { this.dcFast.send(JSON.stringify(data)); } catch (e) {}
     }
   }
 
@@ -227,7 +253,7 @@ class Peer {
     });
   }
 
-  close() { try { if (this.dc) this.dc.close(); } catch (e) {} try { this.pc.close(); } catch (e) {} }
+  close() { try { if (this.dc) this.dc.close(); } catch (e) {} try { if (this.dcFast) this.dcFast.close(); } catch (e) {} try { this.pc.close(); } catch (e) {} }
 }
 
 // ---- Peer manager -----------------------------------------------------------
@@ -264,6 +290,13 @@ export class PeerManager extends EventTarget {
 
   broadcastFile(arrayBuffer, meta) {
     for (const p of this.peers.values()) if (p.dc && p.dc.readyState === 'open') p.sendFile(arrayBuffer, meta);
+  }
+
+  /** Low-latency P2P path for timeline pings — sent alongside (not instead of)
+   *  the signaling-relay control message, since the relay is the reliable
+   *  fallback for peers whose fast channel isn't open yet. */
+  broadcastTimeline(data) {
+    for (const p of this.peers.values()) p.sendTimeline(data);
   }
 
   closeAll() { for (const p of this.peers.values()) p.close(); this.peers.clear(); }

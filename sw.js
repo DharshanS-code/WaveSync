@@ -1,5 +1,5 @@
 /* WaveSync Service Worker — offline app shell + fast startup */
-const CACHE = 'wavesync-v2';
+const CACHE = 'wavesync-v4'; // bumped: UI layout & direct volume slider controls
 const SHELL = [
   './',
   './index.html',

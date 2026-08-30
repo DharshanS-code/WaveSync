@@ -320,13 +320,15 @@ class WaveSync {
     const pos = this.audio.playing
       ? Math.max(0, this.audio.position() - this.audio.outputLatency())
       : this.audio.position();
-    this.signal.control({
+    const payload = {
       kind: 'timeline',
       playing: this.audio.playing,
       position: pos,
       atServerTime: this.signal.clock.now(),
       seq: this.seq
-    });
+    };
+    this.signal.control(payload);          // reliable relay — always sent, covers cold-start
+    this.peers.broadcastTimeline(payload); // P2P fast lane — lower latency when open
   }
 
   _updateDeviceCount() {
@@ -359,6 +361,7 @@ class WaveSync {
       this._calibProgress('joined');
     });
     s.addEventListener('control', (e) => this._onControl(e.detail));
+    this.peers.addEventListener('timeline', (e) => this._onControl({ data: e.detail.data }));
     s.addEventListener('host-left', () => {
       this.ui.setBadge('guest-conn', 'Host left', 'bad');
       this.ui.set('guest-sub', 'Host disconnected');

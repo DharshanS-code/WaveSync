@@ -25,7 +25,7 @@ export const CONFIG = {
   clockBurstCount: 8,
   clockBurstIntervalMs: 220,
   clockWindow: 30,
-  clockEmaAlpha: 0.15,
+  clockProcessNoise: 1e-3,   // 2-state Kalman: how fast the drift-rate estimate is allowed to wander
 
   // Timeline / drift correction
   timelineHeartbeatMs: 2000,
@@ -39,6 +39,7 @@ export const CONFIG = {
   holdToleranceSec: 0.006,   // dead-band around 0: don't correct within ±6ms
   convergeSec: 1.2,          // gentle: drive error to exactly 0 over ~1.2s (no pitch distortion)
   minCorrectionSec: 0.1,     // shortest correction window
+  rateRampSec: 0.03,         // ramp-in/out time for a correction's rate change (smooths the pitch transition)
 
   // Calibration
   calibMinSamples: 5,
