@@ -1,0 +1,18 @@
+{
+  "name": "wavesync",
+  "version": "1.0.0",
+  "private": false,
+  "description": "Open-source, mobile-first PWA that plays the same music in perfect sync across every device on your network.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "node backend/dev-server.js & npx --yes serve -l 3000 .",
+    "serve": "npx --yes serve -l 3000 .",
+    "signal": "node backend/dev-server.js",
+    "deploy:worker": "cd backend && npx --yes wrangler deploy"
+  },
+  "keywords": ["pwa", "webrtc", "music", "sync", "cloudflare", "durable-objects"],
+  "devDependencies": {
+    "ws": "^8.18.0"
+  }
+}
