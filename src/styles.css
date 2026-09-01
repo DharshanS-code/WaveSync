@@ -4,7 +4,7 @@
   --bg-2: #201d1d;
   --surface: #403d3e;      /* dark clay        */
   --text: #fffcd0;         /* cream            */
-  --muted: #ecffff;        /* cool white       */
+  --muted: #807e83;        /* warm grey      */
   --primary: #fffcd0;      /* cream accent     */
   --primary-2: #e7e2b4;
   --accent: #807e83;       /* warm gray accent */
@@ -13,6 +13,7 @@
   --good: #fffcd0;
   --bad: #807e83;
   --wait: #807e83;
+  --ss: #edfaff;
   --r-lg: 30px;
   --r-md: 22px;
   --r-sm: 16px;
@@ -295,9 +296,9 @@ body {
 .support-qr { padding: 10px; border-radius: 18px; background: var(--primary); box-shadow: var(--clay-out); flex: none; }
 .support-qr img { display: block; width: 130px; height: 130px; border-radius: 8px; }
 .support-upi__info { display: flex; flex-direction: column; gap: 3px; min-width: 150px; flex: 1; }
-.support-upi__label { font-size: .68rem; font-weight: 800; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; }
+.support-upi__label { font-size: .68rem; font-weight: 800; letter-spacing: 1px; color: var(--ss); text-transform: uppercase; }
 .support-upi__id { font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 1.05rem; color: var(--text); word-break: break-all; }
-.support-upi__name { font-size: .8rem; color: var(--muted); font-weight: 700; margin-bottom: 8px; }
+.support-upi__name { font-size: .8rem; color: var(--ss); font-weight: 700; margin-bottom: 8px; }
 .support-upi__actions { display: flex; flex-direction: column; gap: 8px; }
 .support-btn {
   border: none; cursor: pointer; text-decoration: none; text-align: center;
