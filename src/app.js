@@ -35,6 +35,7 @@ class WaveSync {
   // ---------- setup ----------
   _bind() {
     this._bindSupport();
+    this._initLatencyOffset();
     document.getElementById('btn-create').onclick = () => this.createRoom();
     document.getElementById('btn-open-join').onclick = () => {
       const p = document.getElementById('join-panel');
@@ -75,6 +76,31 @@ class WaveSync {
       try { await navigator.clipboard.writeText('dharshandcu@nyes'); this.ui.toast('UPI ID copied'); }
       catch (e) { this.ui.toast('dharshandcu@nyes'); }
     };
+  }
+
+  _initLatencyOffset() {
+    let savedMs = 0;
+    try {
+      const stored = localStorage.getItem('wavesync.latencyOffsetMs');
+      if (stored != null) savedMs = Number(stored) || 0;
+    } catch (e) {}
+    this.audio.setLatencyOffset(savedMs / 1000);
+
+    const hostInput = document.getElementById('host-latency-offset');
+    const guestInput = document.getElementById('guest-latency-offset');
+    if (hostInput) hostInput.value = String(savedMs);
+    if (guestInput) guestInput.value = String(savedMs);
+
+    const onOffsetChange = (e) => {
+      const valMs = Number(e.target.value) || 0;
+      this.audio.setLatencyOffset(valMs / 1000);
+      try { localStorage.setItem('wavesync.latencyOffsetMs', String(valMs)); } catch (err) {}
+      if (hostInput && hostInput !== e.target) hostInput.value = String(valMs);
+      if (guestInput && guestInput !== e.target) guestInput.value = String(valMs);
+    };
+
+    if (hostInput) hostInput.addEventListener('change', onOffsetChange);
+    if (guestInput) guestInput.addEventListener('change', onOffsetChange);
   }
 
   // ---------- calibration ----------
