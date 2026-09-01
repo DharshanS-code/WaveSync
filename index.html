@@ -117,6 +117,12 @@
           <span class="status-row__k">Clock offset</span>
           <span class="status-row__v" id="host-offset" data-testid="host-offset">—</span>
         </div>
+        <div class="status-row">
+          <span class="status-row__k">Device Latency</span>
+          <span class="status-row__v">
+            <input type="number" id="host-latency-offset" class="clay-input clay-input--sm" style="width: 80px; padding: 2px 6px; text-align: right;" step="10" min="-500" max="500" value="0" data-testid="host-latency-offset" /> ms
+          </span>
+        </div>
       </div>
     </section>
 
@@ -168,6 +174,12 @@
         <div class="status-row">
           <span class="status-row__k">RTT</span>
           <span class="status-row__v" id="guest-rtt" data-testid="guest-rtt">—</span>
+        </div>
+        <div class="status-row">
+          <span class="status-row__k">Device Latency</span>
+          <span class="status-row__v">
+            <input type="number" id="guest-latency-offset" class="clay-input clay-input--sm" style="width: 80px; padding: 2px 6px; text-align: right;" step="10" min="-500" max="500" value="0" data-testid="guest-latency-offset" /> ms
+          </span>
         </div>
       </div>
       <div class="guest-vol">
