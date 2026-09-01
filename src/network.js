@@ -10,8 +10,6 @@ export class SignalClient extends EventTarget {
     this.url = url;
     this.cfg = cfg;
     this.ws = null;
-    this.wt = null;
-    this.wtWriter = null;
     this.id = null;
     this.code = null;
     this.role = null;
@@ -27,38 +25,6 @@ export class SignalClient extends EventTarget {
     this.code = code; this.role = role; this.name = name || '';
     this._wantOpen = true;
     this._open();
-    this._tryWebTransport();
-  }
-
-  async _tryWebTransport() {
-    if (typeof window === 'undefined' || !('WebTransport' in window)) return;
-    try {
-      const wtUrl = this.url.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:');
-      const wt = new WebTransport(wtUrl);
-      await wt.ready;
-      this.wt = wt;
-      this._readWebTransportDatagrams();
-    } catch (e) {
-      this.wt = null;
-    }
-  }
-
-  async _readWebTransportDatagrams() {
-    if (!this.wt || !this.wt.datagrams) return;
-    try {
-      const reader = this.wt.datagrams.readable.getReader();
-      const decoder = new TextDecoder();
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (value) {
-          try {
-            const m = JSON.parse(decoder.decode(value));
-            this._handle(m);
-          } catch (e) {}
-        }
-      }
-    } catch (e) {}
   }
 
   _open() {
@@ -135,7 +101,7 @@ export class SignalClient extends EventTarget {
         break;
       case 'time': {
         const t2 = Date.now();
-        const q = this.clock.addSample(m.t0, m.t1, t2, 'signaling');
+        const q = this.clock.addSample(m.t0, m.t1, t2);
         this.dispatchEvent(new CustomEvent('clock', { detail: q }));
         break;
       }
@@ -151,16 +117,6 @@ export class SignalClient extends EventTarget {
   }
 
   send(obj) {
-    if (obj && obj.t === 'time' && this.wt && this.wt.datagrams && this.wt.datagrams.writable) {
-      try {
-        const writer = this.wt.datagrams.writable.getWriter();
-        const encoder = new TextEncoder();
-        writer.write(encoder.encode(JSON.stringify(obj))).finally(() => {
-          try { writer.releaseLock(); } catch (e) {}
-        });
-        return true;
-      } catch (e) {}
-    }
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(obj));
       return true;
@@ -175,7 +131,6 @@ export class SignalClient extends EventTarget {
     this._wantOpen = false;
     this._stopClock();
     if (this._retryT) { clearTimeout(this._retryT); this._retryT = null; }
-    if (this.wt) { try { this.wt.close(); } catch (e) {} this.wt = null; }
     if (this.ws) { try { this.ws.close(); } catch (e) {} this.ws = null; }
   }
 }
@@ -255,14 +210,7 @@ class Peer {
 
   _sendPing() {
     if (!this.dcFast || this.dcFast.readyState !== 'open') return;
-    try {
-      this.dcFast.send(JSON.stringify({
-        t: 'ping',
-        seq: this._pingSeq++,
-        t0: performance.now(),
-        wallT0: Date.now()
-      }));
-    } catch (e) {}
+    try { this.dcFast.send(JSON.stringify({ t: 'ping', seq: this._pingSeq++, t0: performance.now() })); } catch (e) {}
   }
 
   _onFastData(data) {
@@ -270,25 +218,12 @@ class Peer {
     let msg; try { msg = JSON.parse(data); } catch { return; }
     if (msg.t === 'ping') {
       if (!this.dcFast || this.dcFast.readyState !== 'open') return;
-      try {
-        this.dcFast.send(JSON.stringify({
-          t: 'pong',
-          seq: msg.seq,
-          t0: msg.t0,
-          wallT0: msg.wallT0,
-          wallT1: Date.now()
-        }));
-      } catch (e) {}
+      try { this.dcFast.send(JSON.stringify({ t: 'pong', seq: msg.seq, t0: msg.t0 })); } catch (e) {}
     } else if (msg.t === 'pong' && typeof msg.t0 === 'number') {
       const rtt = performance.now() - msg.t0;
       if (!isFinite(rtt) || rtt < 0) return;
       this._p2p.update(rtt);
       this.mgr.emit('p2p-latency', { id: this.id, rtt: this._p2p.oneWay * 2, jitter: this._p2p.jitter });
-      if (typeof msg.wallT0 === 'number' && typeof msg.wallT1 === 'number') {
-        const wallT2 = Date.now();
-        const q = this.mgr.signal.clock.addSample(msg.wallT0, msg.wallT1, wallT2, 'webrtc');
-        this.mgr.signal.dispatchEvent(new CustomEvent('clock', { detail: q }));
-      }
     }
   }
 
