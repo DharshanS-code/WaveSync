@@ -1,5 +1,5 @@
 // network.js — signaling (WebSocket) + WebRTC P2P mesh (host <-> each guest).
-import { ClockSynchronizer } from './sync-engine.js';
+import { ClockSynchronizer, LatencyEstimator } from './sync-engine.js';
 
 const rid = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
 
@@ -62,6 +62,16 @@ export class SignalClient extends EventTarget {
 
   _startClock() {
     this._stopClock();
+    // Deliberate design decision: reset the ClockSynchronizer's per-connection
+    // bookkeeping (sample window, confidence, `synced` flag) on every connect
+    // AND every reconnect, since a reconnect is a materially different network
+    // path and stale confidence/sample-count shouldn't carry over. This does
+    // NOT touch the Kalman offset/drift estimate itself (see
+    // ClockSynchronizer.reset()'s own comment) — that's preserved so the
+    // shared-clock estimate doesn't visibly jump, only its confidence is
+    // re-earned. This also means 'sync' correctly refires once the next
+    // burst re-locks, in case anything ever listens for it specifically.
+    this.clock.reset();
     const ping = () => this.send({ t: 'time', t0: Date.now() });
     // Burst of rapid pings for a fast initial clock lock (calibration),
     // then settle into the steady-state cadence.
@@ -132,9 +142,14 @@ class Peer {
     this.id = remoteId;
     this.initiator = initiator;
     this.pc = new RTCPeerConnection({ iceServers: mgr.cfg.iceServers });
-    this.dc = null;
+    this.dc = null;       // reliable/ordered: control + file transfer
+    this.dcFast = null;   // unreliable/unordered: latency ping/pong only
     this._recv = null; // { name, mime, size, received, chunks[] }
     this.connected = false;
+    this.relay = null;    // true once we've confirmed the active ICE pair uses a TURN relay
+    this._p2p = new LatencyEstimator();
+    this._pingSeq = 0;
+    this._pingT = null;
 
     this.pc.onicecandidate = (e) => {
       if (e.candidate) mgr.signal.signal(remoteId, { candidate: e.candidate });
@@ -143,17 +158,27 @@ class Peer {
       const st = this.pc.connectionState;
       this.connected = st === 'connected';
       mgr.emit('peer-state', { id: remoteId, state: st });
+      if (st === 'connected') this._checkRelay();
       if (st === 'failed' || st === 'closed') mgr.remove(remoteId, st);
     };
 
     if (initiator) {
       this.dc = this.pc.createDataChannel('wavesync', { ordered: true });
       this._wireChannel();
+      // Fast lane: unordered, no retransmits — a late/dropped latency ping is
+      // worthless anyway, a fresher one is on the way (see H2 in the sync
+      // engineering brief). Created before the offer so it's negotiated
+      // in-band alongside the reliable channel, no renegotiation needed.
+      this.dcFast = this.pc.createDataChannel('wavesync-fast', { ordered: false, maxRetransmits: 0 });
+      this._wireFastChannel();
       this.pc.createOffer()
         .then((o) => this.pc.setLocalDescription(o))
         .then(() => mgr.signal.signal(remoteId, { sdp: this.pc.localDescription }));
     } else {
-      this.pc.ondatachannel = (e) => { this.dc = e.channel; this._wireChannel(); };
+      this.pc.ondatachannel = (e) => {
+        if (e.channel.label === 'wavesync-fast') { this.dcFast = e.channel; this._wireFastChannel(); }
+        else { this.dc = e.channel; this._wireChannel(); }
+      };
     }
   }
 
@@ -163,6 +188,63 @@ class Peer {
     this.dc.onopen = () => this.mgr.emit('dc-open', { id: this.id, peer: this });
     this.dc.onclose = () => this.mgr.emit('dc-close', { id: this.id });
     this.dc.onmessage = (e) => this._onData(e.data);
+  }
+
+  // Lightweight ping/pong over the fast lane for real host<->guest P2P RTT
+  // measurement (H2's second piece) — distinct from, and independently useful
+  // from, ClockSynchronizer's signaling-WebSocket RTT. Symmetric by design:
+  // whichever side sends 'ping' gets it echoed as 'pong' and computes RTT, so
+  // both host and guest end up with live link-quality telemetry for this peer
+  // (useful for a host wanting to see which guest has a flaky connection, not
+  // just the guest sizing its own scheduling behavior).
+  _wireFastChannel() {
+    this.dcFast.binaryType = 'arraybuffer';
+    this.dcFast.onopen = () => {
+      const interval = this.mgr.cfg.p2pPingIntervalMs || 2000;
+      this._pingT = setInterval(() => this._sendPing(), interval);
+      this._sendPing();
+    };
+    this.dcFast.onclose = () => { if (this._pingT) { clearInterval(this._pingT); this._pingT = null; } };
+    this.dcFast.onmessage = (e) => this._onFastData(e.data);
+  }
+
+  _sendPing() {
+    if (!this.dcFast || this.dcFast.readyState !== 'open') return;
+    try { this.dcFast.send(JSON.stringify({ t: 'ping', seq: this._pingSeq++, t0: performance.now() })); } catch (e) {}
+  }
+
+  _onFastData(data) {
+    if (typeof data !== 'string') return;
+    let msg; try { msg = JSON.parse(data); } catch { return; }
+    if (msg.t === 'ping') {
+      if (!this.dcFast || this.dcFast.readyState !== 'open') return;
+      try { this.dcFast.send(JSON.stringify({ t: 'pong', seq: msg.seq, t0: msg.t0 })); } catch (e) {}
+    } else if (msg.t === 'pong' && typeof msg.t0 === 'number') {
+      const rtt = performance.now() - msg.t0;
+      if (!isFinite(rtt) || rtt < 0) return;
+      this._p2p.update(rtt);
+      this.mgr.emit('p2p-latency', { id: this.id, rtt: this._p2p.oneWay * 2, jitter: this._p2p.jitter });
+    }
+  }
+
+  // Surface ICE relay/TURN fallback (§8.3): a peer on a TURN relay has
+  // meaningfully different latency characteristics worth knowing about when
+  // debugging a specific report. One-shot check shortly after connecting.
+  async _checkRelay() {
+    try {
+      const stats = await this.pc.getStats();
+      let pair = null;
+      stats.forEach((r) => {
+        if (r.type === 'candidate-pair' && r.state === 'succeeded' && (r.nominated || !pair)) pair = r;
+      });
+      if (!pair) return;
+      const local = stats.get(pair.localCandidateId);
+      const remote = stats.get(pair.remoteCandidateId);
+      const localType = local && local.candidateType;
+      const remoteType = remote && remote.candidateType;
+      this.relay = localType === 'relay' || remoteType === 'relay';
+      this.mgr.emit('peer-relay', { id: this.id, relay: this.relay, localType, remoteType });
+    } catch (e) {}
   }
 
   _onData(data) {
@@ -227,7 +309,12 @@ class Peer {
     });
   }
 
-  close() { try { if (this.dc) this.dc.close(); } catch (e) {} try { this.pc.close(); } catch (e) {} }
+  close() {
+    if (this._pingT) { clearInterval(this._pingT); this._pingT = null; }
+    try { if (this.dc) this.dc.close(); } catch (e) {}
+    try { if (this.dcFast) this.dcFast.close(); } catch (e) {}
+    try { this.pc.close(); } catch (e) {}
+  }
 }
 
 // ---- Peer manager -----------------------------------------------------------

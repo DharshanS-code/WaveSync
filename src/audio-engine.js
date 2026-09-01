@@ -17,20 +17,55 @@ export class AudioEngine {
     this._corr = null;       // active deadbeat correction segment
     this.normGain = 1;       // loudness-normalization gain
     this._userVol = 1;       // user volume 0..1
+    this._latencyOffsetSec = 0; // manual per-device calibration offset (see setLatencyOffset)
+    this._lifecycleListeners = [];
+    this._wasPlayingBeforeSuspend = false;
   }
 
   _ensure() {
-    if (!this.ctx) {
+    // Recreate if we've never had a context, OR if the previous one was
+    // closed out from under us (e.g. mobile Safari after a phone-call
+    // interruption). Previously this only checked `!this.ctx`, so a closed
+    // context was never replaced and the engine stayed silently dead.
+    if (!this.ctx || this.ctx.state === 'closed') {
       const AC = window.AudioContext || window.webkitAudioContext;
       this.ctx = new AC({ latencyHint: 'interactive' });
       this.gain = this.ctx.createGain();
       this.gain.connect(this.ctx.destination);
+      this._applyGain();
+      this.ctx.onstatechange = () => {
+        const st = this.ctx.state;
+        if (st === 'closed' && this._playing) {
+          // The context was torn down out from under us (e.g. an iOS
+          // interruption). Freeze position at the last known instant instead
+          // of leaving `_playing` true against a dead context — that would
+          // make position() read a stale/frozen currentTime indefinitely.
+          this._startOffset = this.position();
+          this._playing = false;
+          this.source = null;
+        }
+        this._fireLifecycle(st);
+      };
     }
+  }
+
+  /** Subscribe to AudioContext lifecycle changes ('running'|'suspended'|'closed'|'interrupted').
+   *  Returns an unsubscribe function. Used by SyncEngine to trigger a full
+   *  realign once audio becomes live again after a suspension/interruption. */
+  addLifecycleListener(fn) {
+    this._lifecycleListeners.push(fn);
+    return () => { this._lifecycleListeners = this._lifecycleListeners.filter((f) => f !== fn); };
+  }
+
+  _fireLifecycle(state) {
+    for (const fn of this._lifecycleListeners) { try { fn(state); } catch (e) {} }
   }
 
   async resume() {
     this._ensure();
-    if (this.ctx.state === 'suspended') { try { await this.ctx.resume(); } catch (e) {} }
+    if (this.ctx.state === 'suspended' || this.ctx.state === 'interrupted') {
+      try { await this.ctx.resume(); } catch (e) {}
+    }
   }
 
   async decode(arrayBuffer) {
@@ -79,13 +114,32 @@ export class AudioEngine {
   get rate() { return this._rate; }
   hasCorrection() { return !!this._corr; }
 
+  /**
+   * Manual per-device latency calibration (mitigation for H3): Bluetooth
+   * transport/codec latency (commonly 100-300ms, device-dependent) is not
+   * visible to the Web Audio API on any browser, so `outputLatency()` is
+   * systematically wrong on Bluetooth output no matter how correct the rest
+   * of the sync math is. This lets a "sounds early/late" UI control nudge
+   * the estimate. Signed seconds: positive means this device's true output
+   * delay is LARGER than what the API reports (audio is heard later than
+   * assumed) — increase it if this device sounds behind the others, decrease
+   * (or use a negative value) if it sounds ahead. This file intentionally
+   * does not persist the value — the caller (UI) should do that, e.g. via
+   * localStorage keyed by output device if that's discoverable.
+   */
+  setLatencyOffset(sec) {
+    this._latencyOffsetSec = clampNum(Number(sec) || 0, -0.5, 0.5);
+  }
+  getLatencyOffset() { return this._latencyOffsetSec; }
+
   /** Output latency (s): delay between scheduling a sample and hearing it. */
   outputLatency() {
-    if (!this.ctx) return 0;
+    if (!this.ctx) return this._latencyOffsetSec;
     const o = this.ctx.outputLatency, b = this.ctx.baseLatency;
-    if (typeof o === 'number' && o > 0) return o;
-    if (typeof b === 'number' && b > 0) return b;
-    return 0;
+    let base = 0;
+    if (typeof o === 'number' && o > 0) base = o;
+    else if (typeof b === 'number' && b > 0) base = b;
+    return base + this._latencyOffsetSec;
   }
 
   _clampPos(p) { return Math.max(0, Math.min(this.duration, p)); }
@@ -138,8 +192,14 @@ export class AudioEngine {
   play(offset = null, when = null) {
     if (!this.buffer) return;
     this._ensure();
-    if (this.ctx.state === 'suspended') this.ctx.resume();
-    const off = Math.max(0, Math.min(this.duration, offset != null ? offset : this.position()));
+    if (this.ctx.state === 'suspended' || this.ctx.state === 'interrupted') this.ctx.resume();
+    let off = offset != null ? offset : this.position();
+    // Clamp with a small safety margin before the true end, rather than
+    // exactly at `duration`: starting a source with ~0 samples left produces
+    // an audible click and an onended firing almost immediately.
+    const EPS = 0.05;
+    const safeEnd = this.duration > EPS ? this.duration - EPS : this.duration;
+    off = Math.max(0, Math.min(safeEnd, off));
     this._stopSource();
     const w = when != null ? Math.max(this.ctx.currentTime, when) : this.ctx.currentTime;
     const s = this._newSource();
@@ -222,3 +282,5 @@ export class AudioEngine {
     }
   }
 }
+
+function clampNum(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }

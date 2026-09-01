@@ -40,6 +40,23 @@ export const CONFIG = {
   convergeSec: 1.2,          // gentle: drive error to exactly 0 over ~1.2s (no pitch distortion)
   minCorrectionSec: 0.1,     // shortest correction window
 
+  // setTimeline: how far a heartbeat's extrapolated position may drift from
+  // its actual reported position before it's treated as a real discontinuity
+  // (seek/track change) instead of routine heartbeat noise. Tune against
+  // measured clock-offset jitter, not just RTT.
+  discontinuityToleranceSec: 0.08,
+
+  // Predictive scheduling lead (H2): base + this many multiples of measured
+  // local scheduler jitter, floored while the tab is hidden (timer throttling
+  // there is large and abrupt) and capped so a bad reading can't push a
+  // reseek arbitrarily far into the future.
+  leadJitterMultiplier: 3,
+  backgroundLeadFloorSec: 0.35,
+  maxLeadSec: 0.5,
+
+  // P2P latency ping cadence over the WebRTC fast lane (telemetry only).
+  p2pPingIntervalMs: 2000,
+
   // Calibration
   calibMinSamples: 5,
   calibMinConfidence: 0.6,

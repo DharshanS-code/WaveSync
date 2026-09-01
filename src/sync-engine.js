@@ -69,7 +69,7 @@ export class KalmanOffsetFilter {
  * ClockSynchronizer — estimates the offset between this device's wall clock
  * (Date.now) and the signaling server's shared GMT/UTC clock using NTP-style
  * round trips, with min-RTT anchoring, outlier rejection and EMA smoothing.
- * Emits: 'sync' (first lock), 'update' (every sample).
+ * Emits: 'sync' (first lock since last reset), 'update' (every sample).
  */
 export class ClockSynchronizer extends Emitter {
   constructor(cfg = {}) {
@@ -83,7 +83,7 @@ export class ClockSynchronizer extends Emitter {
     this.synced = false;
     this._samples = [];     // { rtt, offset }
     this._minSamples = cfg.calibMinSamples || 5;
-    this.kalman = new KalmanOffsetFilter();
+    this.kalman = new KalmanOffsetFilter(cfg.clockProcessNoise);
   }
 
   /** Ingest one round trip. t0 = send (local), t1 = server, t2 = recv (local). */
@@ -123,6 +123,12 @@ export class ClockSynchronizer extends Emitter {
     };
   }
 
+  // NOTE: deliberately does NOT touch `this.kalman` — the offset/covariance
+  // estimate is preserved across a reset so a signaling reconnect doesn't
+  // cause an audible re-drift while the fresh calibration burst (see
+  // network.js SignalClient._startClock) re-earns confidence. Only the
+  // per-connection bookkeeping (sample window, confidence, synced flag) is
+  // cleared, which lets 'sync' legitimately refire once the next burst locks.
   reset() { this._samples = []; this.synced = false; this.confidence = 0; this.rtt = Infinity; }
 }
 
@@ -136,6 +142,11 @@ export const ClockSync = ClockSynchronizer;
  * at t = |error| / |u|). Playback then returns to rate 1 and stays stationary
  * at 0. A dead-band holds (no change) when already within ±tol of zero.
  *
+ * Gross errors never reach this class: SyncEngine._monitor checks
+ * `hardThresholdSec` (via AdaptiveResyncPolicy) and calls _reseek() directly
+ * before plan() is ever invoked, so this controller only ever has to solve
+ * the "smooth correction" case.
+ *
  * Sign convention (never inverted): error = local - expected.
  *   error > 0 (ahead)  -> u < 0 (slow down)
  *   error < 0 (behind) -> u > 0 (speed up)
@@ -143,7 +154,6 @@ export const ClockSync = ClockSynchronizer;
 export class DeadbeatController {
   constructor(cfg) {
     this.tol = cfg.holdToleranceSec != null ? cfg.holdToleranceSec : 0.004;
-    this.hard = cfg.hardThresholdSec;
     this.umax = cfg.maxRateAdjust;
     this.tConverge = cfg.convergeSec || 0.8;
     this.minDur = cfg.minCorrectionSec || 0.08;
@@ -151,12 +161,11 @@ export class DeadbeatController {
 
   /**
    * @param {number} error seconds (+ = ahead of host)
-   * @returns {{type:'hold'}|{type:'reseek'}|{type:'correct',u:number,dur:number,zeroAtMs:number}}
+   * @returns {{type:'hold'}|{type:'correct',u:number,dur:number,zeroAtMs:number}}
    */
   plan(error) {
     const abs = Math.abs(error);
     if (abs <= this.tol) return { type: 'hold' };          // already ~0: don't touch
-    if (abs > this.hard) return { type: 'reseek' };        // gross: jump instead
     let u = -error / this.tConverge;                       // desired deviation
     u = clamp(u, -this.umax, this.umax);                   // clamp to safe range
     if (u === 0) return { type: 'hold' };
@@ -171,18 +180,45 @@ export class DeadbeatController {
 /**
  * Scheduler — decoupled periodic loop emitting 'tick'. Timer-based so it keeps
  * running when the tab is backgrounded (rAF would be throttled).
+ *
+ * Also measures its OWN scheduling jitter: the delta between the intended
+ * tick interval and the actual performance.now() gap between ticks. This is
+ * local main-thread scheduling risk (GC pauses, timer throttling, congestion)
+ * — a completely different signal from network RTT, and what SyncEngine uses
+ * to size its predictive scheduling `lead` (see H2 in the engineering brief).
  */
 export class Scheduler extends Emitter {
-  constructor(intervalMs) { super(); this.interval = intervalMs; this._t = null; }
-  start() { this.stop(); this._t = setInterval(() => this.emit('tick', performance.now()), this.interval); }
-  stop() { if (this._t) clearInterval(this._t); this._t = null; }
+  constructor(intervalMs) {
+    super();
+    this.interval = intervalMs;
+    this._t = null;
+    this._last = null;
+    this.jitterMs = 0;   // EMA of |actual tick gap - intended interval|
+  }
+  start() {
+    this.stop();
+    this._last = performance.now();
+    this._t = setInterval(() => {
+      const now = performance.now();
+      const gap = now - this._last;
+      this._last = now;
+      const dev = Math.abs(gap - this.interval);
+      const a = 0.2;
+      this.jitterMs = this.jitterMs ? this.jitterMs + a * (dev - this.jitterMs) : dev;
+      this.emit('tick', now);
+    }, this.interval);
+  }
+  stop() { if (this._t) clearInterval(this._t); this._t = null; this._last = null; }
   get running() { return this._t != null; }
 }
 
 /**
- * LatencyEstimator — tracks one-way delay (rtt/2) and its jitter with an
- * adaptive EMA, and recommends a scheduling lead so predictive reseeks land
- * on target despite network jitter.
+ * LatencyEstimator — tracks a round-trip's one-way component (rtt/2) and its
+ * jitter with an adaptive EMA. Kept transport-agnostic on purpose: SyncEngine
+ * feeds this from real WebRTC P2P ping/pong samples (see reportP2pSample),
+ * distinct from ClockSynchronizer's signaling-WebSocket RTT — the two paths
+ * have genuinely different latency characteristics and are surfaced as
+ * separate telemetry fields (p2pRtt/p2pJitter vs clock.rtt/clock.jitter).
  */
 export class LatencyEstimator {
   constructor() { this.oneWay = 0; this.jitter = 0; this._m = 0; this._v = 0; this.n = 0; }
@@ -235,8 +271,8 @@ export class SyncHealth {
 /**
  * SyncEngine — guest-side orchestrator. Consumes the host-authoritative
  * timeline and the shared clock and continuously steers local playback to
- * match. Event-driven: reacts to clock/timeline updates and also runs a 0.1s
- * safety monitor. Emits: 'status', 'timeline', 'resync'.
+ * match. Event-driven: reacts to clock/timeline updates and also runs a
+ * periodic safety monitor. Emits: 'status', 'timeline', 'resync'.
  */
 export class SyncEngine extends Emitter {
   constructor(audio, clock, cfg) {
@@ -246,7 +282,7 @@ export class SyncEngine extends Emitter {
     this.cfg = cfg;
     this.controller = new DeadbeatController(cfg);
     this.scheduler = new Scheduler(cfg.syncCheckMs);
-    this.latency = new LatencyEstimator();
+    this.latency = new LatencyEstimator();   // now fed by P2P ping/pong (see reportP2pSample), not signaling RTT
     this.policy = new AdaptiveResyncPolicy(cfg);
     this.health = new SyncHealth();
     this.timeline = null;   // { playing, position, atServerTime, seq }
@@ -258,18 +294,59 @@ export class SyncEngine extends Emitter {
     this.telemetry = { min: Infinity, max: -Infinity, absSum: 0, n: 0 };
     this.onStatus = null;   // compatibility callback
 
+    this._onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible' && this.state !== 'idle') {
+        // Timer throttling while hidden can let error accumulate invisibly;
+        // a full realign on return is cheap insurance and avoids trying to
+        // keep smooth corrections converging while backgrounded.
+        this._align(true);
+      }
+    };
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('visibilitychange', this._onVisible);
+    }
+
     this._unbind = [
       this.scheduler.on('tick', () => this._monitor()),
-      this.clock.on('update', (q) => { this.latency.update(q.rtt); if (this.state !== 'idle') this._monitor(); })
+      this.clock.on('update', () => { if (this.state !== 'idle') this._monitor(); }),
+      audio.addLifecycleListener
+        ? audio.addLifecycleListener((st) => {
+            // 'running' = just recovered from suspend/interruption; 'closed' =
+            // context was torn down (AudioEngine already dropped _playing) and
+            // needs an immediate replay rather than waiting on the next
+            // monitor tick to notice via the error threshold.
+            if ((st === 'running' || st === 'closed') && this.state !== 'idle') this._align(true);
+          })
+        : () => {}
     ];
   }
 
-  /** Apply a new host timeline (ignores stale sequence numbers). */
+  /** Feed one WebRTC P2P round-trip sample (ms) — e.g. from network.js's dcFast ping/pong. */
+  reportP2pSample(rttMs) { this.latency.update(rttMs); }
+
+  /**
+   * Apply a new host timeline. Distinguishes a *routine refresh* (heartbeat —
+   * update the extrapolation anchor only) from an event that actually needs
+   * re-anchoring audio: first lock, a play/pause transition, a confirmed
+   * discontinuity (real seek/track change), or an already-gross error. Fixes
+   * H1: previously every heartbeat forced a hard reseek (stop+restart of the
+   * AudioBufferSourceNode), which is an audible dropout every
+   * `timelineHeartbeatMs` regardless of whether anything actually changed.
+   */
   setTimeline(tl) {
     if (this.timeline && tl.seq != null && this.timeline.seq != null && tl.seq < this.timeline.seq) return;
+    const prev = this.timeline;
+    const isFirst = !prev;
+    const transportChanged = !isFirst && prev.playing !== tl.playing;
+    let discontinuous = isFirst || transportChanged;
+    if (!discontinuous && prev.playing && tl.playing) {
+      const predicted = prev.position + (tl.atServerTime - prev.atServerTime) / 1000;
+      const tol = this.cfg.discontinuityToleranceSec != null ? this.cfg.discontinuityToleranceSec : 0.08;
+      discontinuous = Math.abs(predicted - tl.position) > tol;
+    }
     this.timeline = tl;
     this.emit('timeline', tl);
-    this._align(true);
+    this._align(isFirst || transportChanged || discontinuous);
   }
 
   /** Expected local playback position (s) for the current shared time. */
@@ -282,7 +359,14 @@ export class SyncEngine extends Emitter {
 
   start() { this.state = 'armed'; this.controller.reset(); this.policy.reset(); this.health.reset(); this._corrEnd = 0; this.scheduler.start(); this._align(true); }
   stop() { this.scheduler.stop(); this.state = 'idle'; }
-  destroy() { this.stop(); this._unbind.forEach((fn) => fn()); this.clear(); }
+  destroy() {
+    this.stop();
+    this._unbind.forEach((fn) => fn());
+    if (typeof document !== 'undefined' && document.removeEventListener) {
+      document.removeEventListener('visibilitychange', this._onVisible);
+    }
+    this.clear();
+  }
 
   ready() { return !!(this.timeline && this.audio.hasAudio() && this.clock.synced); }
 
@@ -302,9 +386,33 @@ export class SyncEngine extends Emitter {
     if (force || !this.audio.playing) this._reseek(target);
   }
 
+  /**
+   * Predictive scheduling lead (s): how far in the future to schedule
+   * playback so the browser's actual `.play()` execution — not network
+   * transit — lands on target. Driven by measured LOCAL scheduling jitter
+   * (Scheduler's tick-interval drift), not signaling RTT (fixes H2 part 1:
+   * signaling-server RTT can be low even while a busy/backgrounded main
+   * thread makes local scheduling unreliable, and vice versa). Backgrounded
+   * tabs get an explicit floor since timer throttling there is large and
+   * abrupt — an EMA can't anticipate it.
+   */
+  _computeLead() {
+    const base = this.cfg.scheduleLeadSec || 0.02;
+    const jitterSec = (this.scheduler.jitterMs || 0) / 1000;
+    const mult = this.cfg.leadJitterMultiplier != null ? this.cfg.leadJitterMultiplier : 3;
+    const cap = this.cfg.maxLeadSec != null ? this.cfg.maxLeadSec : 0.5;
+    let lead = base + jitterSec * mult;
+    const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    if (hidden) {
+      const floor = this.cfg.backgroundLeadFloorSec != null ? this.cfg.backgroundLeadFloorSec : 0.35;
+      lead = Math.max(lead, floor);
+    }
+    return Math.min(cap, lead);
+  }
+
   /** Predictive reseek: schedule start so the heard position hits `target`. */
   _reseek(target) {
-    const lead = this.latency.lead(this.cfg.scheduleLeadSec);
+    const lead = this._computeLead();
     const outLat = this.audio.outputLatency();
     this.audio.cancelCorrection();
     this.audio.setRate(1);
@@ -333,6 +441,9 @@ export class SyncEngine extends Emitter {
 
     // Gross error (host seek / stall) overrides everything.
     if (Math.abs(error) > this.cfg.hardThresholdSec && this.policy.shouldReseek(error)) {
+      // Guard against scheduling a reseek past end-of-track (minor finding:
+      // _align already had this guard, _monitor's own reseek path didn't).
+      if (expected >= this.audio.duration) { this.audio.seek(this.audio.duration, false); this._report(); return; }
       this._reseek(expected); this._report(); return;
     }
     // A deadbeat correction is in flight: let it converge to exactly 0 —
@@ -344,8 +455,6 @@ export class SyncEngine extends Emitter {
     if (plan.type === 'hold') {
       if (this.audio.rate !== 1 || this.audio.hasCorrection()) this.audio.cancelCorrection();
       this.state = 'locked';
-    } else if (plan.type === 'reseek') {
-      this._reseek(expected);
     } else {
       this.audio.scheduleCorrection(plan.u, plan.dur);
       this._corrEnd = nowCtx + plan.dur;
@@ -372,6 +481,8 @@ export class SyncEngine extends Emitter {
       offset: this.clock.offset,
       jitter: this.clock.jitter,
       oneWay: this.latency.oneWay,
+      p2pRtt: this.latency.oneWay * 2,
+      p2pJitter: this.latency.jitter,
       health: this.health.score(),
       rms: this.health.rms(),
       correctionMs: this.lastPlan && this.lastPlan.zeroAtMs ? this.lastPlan.zeroAtMs : 0,
