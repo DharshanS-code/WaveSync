@@ -35,7 +35,7 @@ class WaveSync {
   // ---------- setup ----------
   _bind() {
     this._bindSupport();
-    this._initLatencyOffset();
+    this._bindCalibrationUI();
     document.getElementById('btn-create').onclick = () => this.createRoom();
     document.getElementById('btn-open-join').onclick = () => {
       const p = document.getElementById('join-panel');
@@ -64,6 +64,45 @@ class WaveSync {
     window.addEventListener('beforeunload', () => { if (this.signal) this.signal.close(); });
   }
 
+  _bindCalibrationUI() {
+    try {
+      const saved = localStorage.getItem('wavesync_latency_offset_ms');
+      if (saved != null) {
+        const ms = Number(saved) || 0;
+        this.audio.setLatencyOffset(ms / 1000);
+      }
+    } catch (e) {}
+    this._updateCalibLabel();
+
+    const btnMinus = document.getElementById('calib-minus');
+    const btnPlus = document.getElementById('calib-plus');
+    if (btnMinus) {
+      btnMinus.onclick = () => {
+        const currentMs = Math.round(this.audio.getLatencyOffset() * 1000);
+        const nextMs = Math.max(-500, currentMs - 20);
+        this.audio.setLatencyOffset(nextMs / 1000);
+        try { localStorage.setItem('wavesync_latency_offset_ms', String(nextMs)); } catch (e) {}
+        this._updateCalibLabel();
+      };
+    }
+    if (btnPlus) {
+      btnPlus.onclick = () => {
+        const currentMs = Math.round(this.audio.getLatencyOffset() * 1000);
+        const nextMs = Math.min(500, currentMs + 20);
+        this.audio.setLatencyOffset(nextMs / 1000);
+        try { localStorage.setItem('wavesync_latency_offset_ms', String(nextMs)); } catch (e) {}
+        this._updateCalibLabel();
+      };
+    }
+  }
+
+  _updateCalibLabel() {
+    const el = document.getElementById('guest-calib-val');
+    if (!el) return;
+    const ms = Math.round(this.audio.getLatencyOffset() * 1000);
+    el.textContent = `${ms >= 0 ? '+' : ''}${ms} ms`;
+  }
+
   _bindSupport() {
     const overlay = document.getElementById('support-overlay');
     const open = () => { overlay.hidden = false; requestAnimationFrame(() => overlay.classList.add('is-open')); };
@@ -76,31 +115,6 @@ class WaveSync {
       try { await navigator.clipboard.writeText('dharshandcu@nyes'); this.ui.toast('UPI ID copied'); }
       catch (e) { this.ui.toast('dharshandcu@nyes'); }
     };
-  }
-
-  _initLatencyOffset() {
-    let savedMs = 0;
-    try {
-      const stored = localStorage.getItem('wavesync.latencyOffsetMs');
-      if (stored != null) savedMs = Number(stored) || 0;
-    } catch (e) {}
-    this.audio.setLatencyOffset(savedMs / 1000);
-
-    const hostInput = document.getElementById('host-latency-offset');
-    const guestInput = document.getElementById('guest-latency-offset');
-    if (hostInput) hostInput.value = String(savedMs);
-    if (guestInput) guestInput.value = String(savedMs);
-
-    const onOffsetChange = (e) => {
-      const valMs = Number(e.target.value) || 0;
-      this.audio.setLatencyOffset(valMs / 1000);
-      try { localStorage.setItem('wavesync.latencyOffsetMs', String(valMs)); } catch (err) {}
-      if (hostInput && hostInput !== e.target) hostInput.value = String(valMs);
-      if (guestInput && guestInput !== e.target) guestInput.value = String(valMs);
-    };
-
-    if (hostInput) hostInput.addEventListener('change', onOffsetChange);
-    if (guestInput) guestInput.addEventListener('change', onOffsetChange);
   }
 
   // ---------- calibration ----------

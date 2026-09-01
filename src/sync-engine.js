@@ -86,9 +86,8 @@ export class ClockSynchronizer extends Emitter {
     this.kalman = new KalmanOffsetFilter(cfg.clockProcessNoise);
   }
 
-  /** Ingest one round trip from any sync path (WebSocket, WebTransport, or WebRTC DataChannel).
-   *  t0 = send (local), t1 = remote/server, t2 = recv (local). */
-  addSample(t0, t1, t2, source = 'default') {
+  /** Ingest one round trip. t0 = send (local), t1 = server/remote, t2 = recv (local). Accepts optional source path tag. */
+  addSample(t0, t1, t2, source = 'ws') {
     const rtt = t2 - t0;
     if (rtt < 0 || !isFinite(rtt)) return this.quality();
     const rawOffset = t1 - (t0 + t2) / 2;
@@ -97,20 +96,20 @@ export class ClockSynchronizer extends Emitter {
 
     const rtts = this._samples.map((s) => s.rtt);
     const med = median(rtts);
-    const isSpike = rtt > med * 2.5 + 5 && this._samples.length > 3;
-    if (!isSpike) {
+
+    // Reject outlier spikes before updating Kalman state
+    if (this._samples.length <= 3 || rtt <= med * 2.5 + 10) {
       const measVar = Math.max(1, (rtt * rtt) / 4); // trust low-RTT samples more
       this.offset = this.kalman.update(rawOffset, measVar);
-      if (!this.synced) { this.synced = true; this.emit('sync', this.quality()); }
     }
 
-    const kept = this._samples.filter((s) => s.rtt <= med * 2.5 + 5);
-    let best = kept[0] || this._samples[0];
-    for (const s of kept) if (s.rtt < best.rtt) best = s;
+    if (!this.synced) { this.synced = true; this.emit('sync', this.quality()); }
 
-    this.rtt = best ? best.rtt : rtt;
+    let best = this._samples[0];
+    for (const s of this._samples) if (s.rtt < best.rtt) best = s;
+    this.rtt = best.rtt;
     this.jitter = stddev(rtts);
-    this.confidence = clamp(kept.length / this._minSamples, 0, 1) * clamp(1 - this.jitter / 150, 0, 1);
+    this.confidence = clamp(this._samples.length / this._minSamples, 0, 1) * clamp(1 - this.jitter / 150, 0, 1);
 
     const q = this.quality();
     this.emit('update', q);
@@ -182,13 +181,9 @@ export class DeadbeatController {
 }
 
 /**
- * Scheduler — decoupled periodic loop emitting 'tick'. Uses a dedicated Web
- * Worker timer to run off the main thread, immune to main-thread congestion
- * (GC pauses, DOM layout/paint). Fallbacks to main-thread setInterval if
- * Worker execution is unavailable.
- *
- * Measures its OWN scheduling jitter: the delta between intended tick interval
- * and actual execution gap.
+ * Scheduler — decoupled periodic loop emitting 'tick'. Driven by a dedicated
+ * Web Worker (falling back to setInterval) to remain unthrottled by main-thread
+ * JS congestion or tab backgrounding.
  */
 export class Scheduler extends Emitter {
   constructor(intervalMs) {
@@ -196,76 +191,60 @@ export class Scheduler extends Emitter {
     this.interval = intervalMs;
     this._t = null;
     this._worker = null;
-    this._workerUrl = null;
     this._last = null;
     this.jitterMs = 0;   // EMA of |actual tick gap - intended interval|
   }
+
+  _onTick() {
+    const now = performance.now();
+    if (this._last !== null) {
+      const gap = now - this._last;
+      const dev = Math.abs(gap - this.interval);
+      const a = 0.2;
+      this.jitterMs = this.jitterMs ? this.jitterMs + a * (dev - this.jitterMs) : dev;
+    }
+    this._last = now;
+    this.emit('tick', now);
+  }
+
   start() {
     this.stop();
     this._last = performance.now();
 
-    const onTick = () => {
-      const now = performance.now();
-      const gap = now - this._last;
-      this._last = now;
-      const dev = Math.abs(gap - this.interval);
-      const a = 0.2;
-      this.jitterMs = this.jitterMs ? this.jitterMs + a * (dev - this.jitterMs) : dev;
-      this.emit('tick', now);
-    };
-
-    if (typeof Worker !== 'undefined' && typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+    if (typeof Blob !== 'undefined' && typeof Worker !== 'undefined' && typeof URL !== 'undefined') {
       try {
-        const workerCode = `
-          let timer = null;
+        const code = `
+          let t = null;
           self.onmessage = function(e) {
-            if (e.data.cmd === 'start') {
-              if (timer) clearInterval(timer);
-              timer = setInterval(function() {
-                self.postMessage({ type: 'tick' });
-              }, e.data.interval);
-            } else if (e.data.cmd === 'stop') {
-              if (timer) clearInterval(timer);
-              timer = null;
+            if (e.data && e.data.action === 'start') {
+              if (t) clearInterval(t);
+              t = setInterval(function() { self.postMessage('tick'); }, e.data.interval);
+            } else if (e.data && e.data.action === 'stop') {
+              if (t) clearInterval(t);
+              t = null;
             }
           };
         `;
-        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        const blob = new Blob([code], { type: 'application/javascript' });
         const url = URL.createObjectURL(blob);
-        const w = new Worker(url);
-        w.onmessage = (e) => {
-          if (e.data && e.data.type === 'tick') {
-            onTick();
-          }
-        };
-        w.postMessage({ cmd: 'start', interval: this.interval });
-        this._worker = w;
-        this._workerUrl = url;
+        this._worker = new Worker(url);
+        this._worker.onmessage = () => this._onTick();
+        this._worker.postMessage({ action: 'start', interval: this.interval });
         return;
       } catch (e) {
-        // Fallback to main-thread timer if worker creation fails
+        this._worker = null;
       }
     }
 
-    this._t = setInterval(onTick, this.interval);
+    this._t = setInterval(() => this._onTick(), this.interval);
   }
 
   stop() {
     if (this._worker) {
-      try {
-        this._worker.postMessage({ cmd: 'stop' });
-        this._worker.terminate();
-      } catch (e) {}
-      if (this._workerUrl) {
-        try { URL.revokeObjectURL(this._workerUrl); } catch (e) {}
-      }
+      try { this._worker.postMessage({ action: 'stop' }); this._worker.terminate(); } catch (e) {}
       this._worker = null;
-      this._workerUrl = null;
     }
-    if (this._t) {
-      clearInterval(this._t);
-      this._t = null;
-    }
+    if (this._t) { clearInterval(this._t); this._t = null; }
     this._last = null;
   }
 

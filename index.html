@@ -117,12 +117,6 @@
           <span class="status-row__k">Clock offset</span>
           <span class="status-row__v" id="host-offset" data-testid="host-offset">—</span>
         </div>
-        <div class="status-row">
-          <span class="status-row__k">Device Latency</span>
-          <span class="status-row__v">
-            <input type="number" id="host-latency-offset" class="clay-input clay-input--sm" style="width: 80px; padding: 2px 6px; text-align: right;" step="10" min="-500" max="500" value="0" data-testid="host-latency-offset" /> ms
-          </span>
-        </div>
       </div>
     </section>
 
@@ -175,16 +169,21 @@
           <span class="status-row__k">RTT</span>
           <span class="status-row__v" id="guest-rtt" data-testid="guest-rtt">—</span>
         </div>
-        <div class="status-row">
-          <span class="status-row__k">Device Latency</span>
-          <span class="status-row__v">
-            <input type="number" id="guest-latency-offset" class="clay-input clay-input--sm" style="width: 80px; padding: 2px 6px; text-align: right;" step="10" min="-500" max="500" value="0" data-testid="guest-latency-offset" /> ms
-          </span>
-        </div>
       </div>
       <div class="guest-vol">
         <span class="vol__icon">Vol</span>
         <input type="range" class="clay-range clay-range--sm" id="guest-vol" min="0" max="100" value="100" data-testid="guest-volume" />
+      </div>
+
+      <div class="clay-card status-card" style="margin-top: 12px;">
+        <div class="status-row">
+          <span class="status-row__k">Device Latency Nudge</span>
+          <span class="status-row__v" id="guest-calib-val" data-testid="guest-calib-val">0 ms</span>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 8px;">
+          <button class="clay-btn clay-btn--ghost" id="calib-minus" data-testid="calib-minus-btn" style="flex: 1; padding: 6px;">-20ms (Sounds Late)</button>
+          <button class="clay-btn clay-btn--ghost" id="calib-plus" data-testid="calib-plus-btn" style="flex: 1; padding: 6px;">+20ms (Sounds Early)</button>
+        </div>
       </div>
     </section>
 

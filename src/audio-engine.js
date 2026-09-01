@@ -132,29 +132,31 @@ export class AudioEngine {
   }
   getLatencyOffset() { return this._latencyOffsetSec; }
 
-  /** Output latency (s): delay between scheduling a sample and hearing it.
-   *  Uses AudioContext.getOutputTimestamp() when available for dynamic latency
-   *  calculation, falling back to ctx.outputLatency / ctx.baseLatency. */
+  /** Output latency (s): delay between scheduling a sample and hearing it. */
   outputLatency() {
     if (!this.ctx) return this._latencyOffsetSec;
     let base = 0;
+    const o = this.ctx.outputLatency, b = this.ctx.baseLatency;
+    if (typeof o === 'number' && o > 0) base = o;
+    else if (typeof b === 'number' && b > 0) base = b;
+
     if (typeof this.ctx.getOutputTimestamp === 'function') {
       try {
         const ts = this.ctx.getOutputTimestamp();
-        if (ts && typeof ts.contextTime === 'number' && ts.contextTime >= 0 && typeof ts.performanceTime === 'number' && ts.performanceTime > 0) {
-          const dtSec = (performance.now() - ts.performanceTime) / 1000;
-          const currentOutputContextTime = ts.contextTime + dtSec;
-          const dynLatency = this.ctx.currentTime - currentOutputContextTime;
-          if (dynLatency >= 0 && isFinite(dynLatency)) {
-            base = dynLatency;
+        if (
+          ts &&
+          typeof ts.contextTime === 'number' &&
+          typeof ts.performanceTime === 'number' &&
+          ts.performanceTime > 0 &&
+          ts.contextTime > 0
+        ) {
+          const perfNow = performance.now();
+          const dynamicSec = (ts.performanceTime - perfNow) / 1000 + (this.ctx.currentTime - ts.contextTime);
+          if (isFinite(dynamicSec) && dynamicSec >= 0 && dynamicSec <= 0.35) {
+            base = dynamicSec;
           }
         }
       } catch (e) {}
-    }
-    if (!base) {
-      const o = this.ctx.outputLatency, b = this.ctx.baseLatency;
-      if (typeof o === 'number' && o > 0) base = o;
-      else if (typeof b === 'number' && b > 0) base = b;
     }
     return base + this._latencyOffsetSec;
   }

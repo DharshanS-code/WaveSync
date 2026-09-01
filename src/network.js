@@ -10,8 +10,6 @@ export class SignalClient extends EventTarget {
     this.url = url;
     this.cfg = cfg;
     this.ws = null;
-    this.wt = null;
-    this.wtWriter = null;
     this.id = null;
     this.code = null;
     this.role = null;
@@ -26,39 +24,32 @@ export class SignalClient extends EventTarget {
   connect(code, role, name) {
     this.code = code; this.role = role; this.name = name || '';
     this._wantOpen = true;
-    this._open();
     this._tryWebTransport();
+    this._open();
   }
 
   async _tryWebTransport() {
-    if (typeof window === 'undefined' || !('WebTransport' in window)) return;
+    if (typeof WebTransport === 'undefined') return;
     try {
-      const wtUrl = this.url.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:');
-      const wt = new WebTransport(wtUrl);
-      await wt.ready;
-      this.wt = wt;
-      this._readWebTransportDatagrams();
-    } catch (e) {
-      this.wt = null;
-    }
-  }
-
-  async _readWebTransportDatagrams() {
-    if (!this.wt || !this.wt.datagrams) return;
-    try {
-      const reader = this.wt.datagrams.readable.getReader();
-      const decoder = new TextDecoder();
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (value) {
-          try {
-            const m = JSON.parse(decoder.decode(value));
-            this._handle(m);
-          } catch (e) {}
+      const wtUrl = this.url.replace(/^ws/, 'https') + '/wt?code=' + encodeURIComponent(this.code);
+      this._wt = new WebTransport(wtUrl);
+      await this._wt.ready;
+      this._wtWriter = this._wt.datagrams.writable.getWriter();
+      const reader = this._wt.datagrams.readable.getReader();
+      (async () => {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          let m; try { m = JSON.parse(new TextDecoder().decode(value)); } catch { continue; }
+          if (m && m.t === 'time' && typeof m.t0 === 'number' && typeof m.t1 === 'number') {
+            const q = this.clock.addSample(m.t0, m.t1, Date.now(), 'webtransport');
+            this.dispatchEvent(new CustomEvent('clock', { detail: q }));
+          }
         }
-      }
-    } catch (e) {}
+      })();
+    } catch (e) {
+      this._wt = null; this._wtWriter = null;
+    }
   }
 
   _open() {
@@ -135,7 +126,7 @@ export class SignalClient extends EventTarget {
         break;
       case 'time': {
         const t2 = Date.now();
-        const q = this.clock.addSample(m.t0, m.t1, t2, 'signaling');
+        const q = this.clock.addSample(m.t0, m.t1, t2);
         this.dispatchEvent(new CustomEvent('clock', { detail: q }));
         break;
       }
@@ -151,16 +142,6 @@ export class SignalClient extends EventTarget {
   }
 
   send(obj) {
-    if (obj && obj.t === 'time' && this.wt && this.wt.datagrams && this.wt.datagrams.writable) {
-      try {
-        const writer = this.wt.datagrams.writable.getWriter();
-        const encoder = new TextEncoder();
-        writer.write(encoder.encode(JSON.stringify(obj))).finally(() => {
-          try { writer.releaseLock(); } catch (e) {}
-        });
-        return true;
-      } catch (e) {}
-    }
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(obj));
       return true;
@@ -175,7 +156,6 @@ export class SignalClient extends EventTarget {
     this._wantOpen = false;
     this._stopClock();
     if (this._retryT) { clearTimeout(this._retryT); this._retryT = null; }
-    if (this.wt) { try { this.wt.close(); } catch (e) {} this.wt = null; }
     if (this.ws) { try { this.ws.close(); } catch (e) {} this.ws = null; }
   }
 }
@@ -259,8 +239,8 @@ class Peer {
       this.dcFast.send(JSON.stringify({
         t: 'ping',
         seq: this._pingSeq++,
-        t0: performance.now(),
-        wallT0: Date.now()
+        perf0: performance.now(),
+        t0: Date.now()
       }));
     } catch (e) {}
   }
@@ -271,23 +251,29 @@ class Peer {
     if (msg.t === 'ping') {
       if (!this.dcFast || this.dcFast.readyState !== 'open') return;
       try {
+        const remoteTime = (this.mgr && this.mgr.signal && this.mgr.signal.clock)
+          ? this.mgr.signal.clock.now()
+          : Date.now();
         this.dcFast.send(JSON.stringify({
           t: 'pong',
           seq: msg.seq,
+          perf0: msg.perf0,
           t0: msg.t0,
-          wallT0: msg.wallT0,
-          wallT1: Date.now()
+          t1: remoteTime
         }));
       } catch (e) {}
-    } else if (msg.t === 'pong' && typeof msg.t0 === 'number') {
-      const rtt = performance.now() - msg.t0;
-      if (!isFinite(rtt) || rtt < 0) return;
-      this._p2p.update(rtt);
-      this.mgr.emit('p2p-latency', { id: this.id, rtt: this._p2p.oneWay * 2, jitter: this._p2p.jitter });
-      if (typeof msg.wallT0 === 'number' && typeof msg.wallT1 === 'number') {
-        const wallT2 = Date.now();
-        const q = this.mgr.signal.clock.addSample(msg.wallT0, msg.wallT1, wallT2, 'webrtc');
-        this.mgr.signal.dispatchEvent(new CustomEvent('clock', { detail: q }));
+    } else if (msg.t === 'pong') {
+      const perfNow = performance.now();
+      const wallNow = Date.now();
+      const rttPerf = typeof msg.perf0 === 'number' ? perfNow - msg.perf0 : -1;
+      if (rttPerf > 0 && isFinite(rttPerf)) {
+        this._p2p.update(rttPerf);
+        this.mgr.emit('p2p-latency', { id: this.id, rtt: this._p2p.oneWay * 2, jitter: this._p2p.jitter });
+      }
+      if (typeof msg.t0 === 'number' && typeof msg.t1 === 'number') {
+        if (this.mgr && this.mgr.signal && this.mgr.signal.clock) {
+          this.mgr.signal.clock.addSample(msg.t0, msg.t1, wallNow, 'webrtc');
+        }
       }
     }
   }
