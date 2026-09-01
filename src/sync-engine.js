@@ -86,29 +86,25 @@ export class ClockSynchronizer extends Emitter {
     this.kalman = new KalmanOffsetFilter(cfg.clockProcessNoise);
   }
 
-  /** Ingest one round trip from any sync path (WebSocket, WebTransport, or WebRTC DataChannel).
-   *  t0 = send (local), t1 = remote/server, t2 = recv (local). */
-  addSample(t0, t1, t2, source = 'default') {
+  /** Ingest one round trip. t0 = send (local), t1 = server, t2 = recv (local). */
+  addSample(t0, t1, t2) {
     const rtt = t2 - t0;
     if (rtt < 0 || !isFinite(rtt)) return this.quality();
     const rawOffset = t1 - (t0 + t2) / 2;
-    this._samples.push({ rtt, offset: rawOffset, source });
+    this._samples.push({ rtt, offset: rawOffset });
     if (this._samples.length > this.window) this._samples.shift();
 
     const rtts = this._samples.map((s) => s.rtt);
     const med = median(rtts);
-    const isSpike = rtt > med * 2.5 + 5 && this._samples.length > 3;
-    if (!isSpike) {
-      const measVar = Math.max(1, (rtt * rtt) / 4); // trust low-RTT samples more
-      this.offset = this.kalman.update(rawOffset, measVar);
-      if (!this.synced) { this.synced = true; this.emit('sync', this.quality()); }
-    }
-
-    const kept = this._samples.filter((s) => s.rtt <= med * 2.5 + 5);
-    let best = kept[0] || this._samples[0];
+    const kept = this._samples.filter((s) => s.rtt <= med * 2.5 + 5); // reject spikes
+    let best = kept[0];
     for (const s of kept) if (s.rtt < best.rtt) best = s;
 
-    this.rtt = best ? best.rtt : rtt;
+    const measVar = Math.max(1, (best.rtt * best.rtt) / 4); // trust low-RTT samples more
+    this.offset = this.kalman.update(best.offset, measVar);
+    if (!this.synced) { this.synced = true; this.emit('sync', this.quality()); }
+
+    this.rtt = best.rtt;
     this.jitter = stddev(rtts);
     this.confidence = clamp(kept.length / this._minSamples, 0, 1) * clamp(1 - this.jitter / 150, 0, 1);
 
@@ -182,29 +178,27 @@ export class DeadbeatController {
 }
 
 /**
- * Scheduler — decoupled periodic loop emitting 'tick'. Uses a dedicated Web
- * Worker timer to run off the main thread, immune to main-thread congestion
- * (GC pauses, DOM layout/paint). Fallbacks to main-thread setInterval if
- * Worker execution is unavailable.
+ * Scheduler — decoupled periodic loop emitting 'tick'. Timer-based so it keeps
+ * running when the tab is backgrounded (rAF would be throttled).
  *
- * Measures its OWN scheduling jitter: the delta between intended tick interval
- * and actual execution gap.
+ * Also measures its OWN scheduling jitter: the delta between the intended
+ * tick interval and the actual performance.now() gap between ticks. This is
+ * local main-thread scheduling risk (GC pauses, timer throttling, congestion)
+ * — a completely different signal from network RTT, and what SyncEngine uses
+ * to size its predictive scheduling `lead` (see H2 in the engineering brief).
  */
 export class Scheduler extends Emitter {
   constructor(intervalMs) {
     super();
     this.interval = intervalMs;
     this._t = null;
-    this._worker = null;
-    this._workerUrl = null;
     this._last = null;
     this.jitterMs = 0;   // EMA of |actual tick gap - intended interval|
   }
   start() {
     this.stop();
     this._last = performance.now();
-
-    const onTick = () => {
+    this._t = setInterval(() => {
       const now = performance.now();
       const gap = now - this._last;
       this._last = now;
@@ -212,64 +206,10 @@ export class Scheduler extends Emitter {
       const a = 0.2;
       this.jitterMs = this.jitterMs ? this.jitterMs + a * (dev - this.jitterMs) : dev;
       this.emit('tick', now);
-    };
-
-    if (typeof Worker !== 'undefined' && typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
-      try {
-        const workerCode = `
-          let timer = null;
-          self.onmessage = function(e) {
-            if (e.data.cmd === 'start') {
-              if (timer) clearInterval(timer);
-              timer = setInterval(function() {
-                self.postMessage({ type: 'tick' });
-              }, e.data.interval);
-            } else if (e.data.cmd === 'stop') {
-              if (timer) clearInterval(timer);
-              timer = null;
-            }
-          };
-        `;
-        const blob = new Blob([workerCode], { type: 'application/javascript' });
-        const url = URL.createObjectURL(blob);
-        const w = new Worker(url);
-        w.onmessage = (e) => {
-          if (e.data && e.data.type === 'tick') {
-            onTick();
-          }
-        };
-        w.postMessage({ cmd: 'start', interval: this.interval });
-        this._worker = w;
-        this._workerUrl = url;
-        return;
-      } catch (e) {
-        // Fallback to main-thread timer if worker creation fails
-      }
-    }
-
-    this._t = setInterval(onTick, this.interval);
+    }, this.interval);
   }
-
-  stop() {
-    if (this._worker) {
-      try {
-        this._worker.postMessage({ cmd: 'stop' });
-        this._worker.terminate();
-      } catch (e) {}
-      if (this._workerUrl) {
-        try { URL.revokeObjectURL(this._workerUrl); } catch (e) {}
-      }
-      this._worker = null;
-      this._workerUrl = null;
-    }
-    if (this._t) {
-      clearInterval(this._t);
-      this._t = null;
-    }
-    this._last = null;
-  }
-
-  get running() { return this._worker != null || this._t != null; }
+  stop() { if (this._t) clearInterval(this._t); this._t = null; this._last = null; }
+  get running() { return this._t != null; }
 }
 
 /**

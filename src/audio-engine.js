@@ -132,30 +132,13 @@ export class AudioEngine {
   }
   getLatencyOffset() { return this._latencyOffsetSec; }
 
-  /** Output latency (s): delay between scheduling a sample and hearing it.
-   *  Uses AudioContext.getOutputTimestamp() when available for dynamic latency
-   *  calculation, falling back to ctx.outputLatency / ctx.baseLatency. */
+  /** Output latency (s): delay between scheduling a sample and hearing it. */
   outputLatency() {
     if (!this.ctx) return this._latencyOffsetSec;
+    const o = this.ctx.outputLatency, b = this.ctx.baseLatency;
     let base = 0;
-    if (typeof this.ctx.getOutputTimestamp === 'function') {
-      try {
-        const ts = this.ctx.getOutputTimestamp();
-        if (ts && typeof ts.contextTime === 'number' && ts.contextTime >= 0 && typeof ts.performanceTime === 'number' && ts.performanceTime > 0) {
-          const dtSec = (performance.now() - ts.performanceTime) / 1000;
-          const currentOutputContextTime = ts.contextTime + dtSec;
-          const dynLatency = this.ctx.currentTime - currentOutputContextTime;
-          if (dynLatency >= 0 && isFinite(dynLatency)) {
-            base = dynLatency;
-          }
-        }
-      } catch (e) {}
-    }
-    if (!base) {
-      const o = this.ctx.outputLatency, b = this.ctx.baseLatency;
-      if (typeof o === 'number' && o > 0) base = o;
-      else if (typeof b === 'number' && b > 0) base = b;
-    }
+    if (typeof o === 'number' && o > 0) base = o;
+    else if (typeof b === 'number' && b > 0) base = b;
     return base + this._latencyOffsetSec;
   }
 
