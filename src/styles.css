@@ -209,7 +209,7 @@ body {
 .clay-card .badge--wait { color: #9a6a00; }
 .clay-card .badge--bad { color: #c0392b; }
 .support-modal .support-title { color: #1f2c42; }
-.support-modal .support-sub { color: #4d5f7e; }
+.support-modal .support-sub { color: #edfaff; }
 .support-close { background: rgba(255,255,255,.55); color: #4d5f7e; box-shadow: 4px 4px 10px rgba(120,150,200,.4), -3px -3px 8px rgba(255,255,255,.9); }
 .join-panel .field-label { color: #4d5f7e; }
 .join-panel .clay-input { background: rgba(255,255,255,.55); color: #1f2c42; box-shadow: inset 3px 3px 8px rgba(120,150,200,.35), inset -3px -3px 8px rgba(255,255,255,.85); }
