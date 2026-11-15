@@ -1,11 +1,10 @@
 {
   "name": "WaveSync — Synchronized Music Player",
   "short_name": "WaveSync",
-  "description": "Play the same music in perfect sync across every device on your network.",
+  "description": "Listen to local music together with host-coordinated, peer-to-peer playback.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
-  "orientation": "portrait",
   "background_color": "#262323",
   "theme_color": "#262323",
   "categories": ["music", "entertainment", "utilities"],

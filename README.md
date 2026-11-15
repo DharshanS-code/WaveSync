@@ -1,188 +1,72 @@
-# WaveSync — Synchronized Music Player
+# WaveSync
 
-**Play one song in perfect sync across every device on your network.**
+**Listen together. Keep your music local.**
 
-WaveSync is an open-source, mobile-first **PWA**. A host picks a track from their
-device, WaveSync streams the audio **peer-to-peer over WebRTC** to every guest,
-and a dedicated **synchronization engine** keeps all devices locked to a shared
-GMT/UTC clock with sub-100 ms accuracy.
+WaveSync is a mobile-first music PWA. A host selects local audio, guests receive it directly over encrypted WebRTC, and a host-authoritative timeline coordinates playback. No accounts or server-side audio upload. Actual acoustic synchronization depends on browser, device, network and output route; perfect or submillisecond accuracy is not guaranteed.
 
-> Zero-cost by design: LAN-first WebRTC using only free Google STUN — **no paid
-> TURN server required** when devices share the same Wi-Fi/network.
+## Features
 
----
+- Local browser-decoded audio with bounded current/next caching.
+- Playlist append, track selection, previous/next, removal and keyboard/pointer reordering; repeat and shuffle.
+- Host-only transport controls; guest local volume, explicit audio activation and manual resync.
+- Stable track/transfer identity, serialized file transfer and backpressure/resource limits.
+- Live-room identity resume, peer rebuilding, authoritative pause on host loss and deliberate re-entry after expired recovery.
+- Original responsive music interface, light/dark/system themes and accents, accessible labels/focus/live errors, safe-area and reduced-motion support.
+- Estimated clock/output diagnostics and adaptive delivery buffering; unavailable Wi-Fi hardware information is explicitly not fabricated.
+- Versioned offline application shell and safe user-requested updates outside active rooms.
 
-## ✨ Features
+Audio format support follows actual browser `decodeAudioData`; unsupported or corrupt files produce an error. Full transfer/decode is required before guest playback: this is not progressive streaming.
 
-- 🎵 **Local audio** — host selects MP3 / AAC / WAV / OGG-Opus / FLAC (browser-supported).
-- 📡 **P2P audio transfer** — audio travels host→guests over WebRTC DataChannels; it never touches a server.
-- ⏱️ **Sync engine** — host-authoritative timeline, NTP-style shared clock, RTT/offset estimation, drift detection, **0.1 s adaptive checks**, smooth rate correction + hard reseek.
-- 🚪 **Rooms** — create/join, short code, shareable link, host/guest roles, live device count, host playback control, leave, auto-reconnect.
-- 📱 **PWA** — `manifest.json`, service worker, installable, offline app shell, responsive, Media Session API.
-- 🧊 **Claymorphism UI** — soft rounded surfaces, depth, lightweight animations, touch-friendly.
-- 🔒 **Secure** — random unambiguous room codes, host-only control authorization, input validation, HTTPS/WSS ready.
-
----
-
-## 🗂 Project structure
-
-```
-WaveSync/
-├── index.html            # app shell
-├── manifest.json         # PWA manifest
-├── sw.js                 # service worker (offline shell)
-├── package.json
-├── assets/               # PWA icons
-├── src/
-│   ├── config.js         # signaling URL + sync tuning
-│   ├── app.js            # orchestrator (host + guest)
-│   ├── audio-engine.js   # Web Audio decode + scheduled playback
-│   ├── sync-engine.js    # ClockSync + SyncController (drift control)
-│   ├── network.js        # signaling client + WebRTC peer mesh
-│   ├── ui.js             # DOM helpers
-│   └── styles.css        # claymorphism theme
-├── backend/
-│   ├── worker.js         # Cloudflare Worker + Durable Object (RoomDO)
-│   ├── dev-server.js     # Node dev signaling server (local testing)
-│   ├── wrangler.toml     # Cloudflare deploy config
-│   └── package.json
-├── LICENSE               # MIT
-└── README.md
-```
-
----
-
-## 🚀 Run locally
-
-**Requirements:** Node 18+ and a modern browser. WebRTC + Web Audio need a
-*secure context*: `http://localhost` counts as secure, so localhost works.
+## Run locally
 
 ```bash
-# 1. install the dev signaling server dependency (ws)
-npm install
-
-# 2. start the signaling server  →  ws://localhost:8787/api/room
-npm run signal
-
-# 3. in another terminal, serve the static app on http://localhost:3000
-npm run serve
+npm install --ignore-scripts
+npm run dev
 ```
 
-Open **http://localhost:3000** on your phone/laptop.
+Open **http://localhost:3000**. Create a room, add audio, wait for clock calibration, and press Play. In another browser/device, enter the room code or use the invitation link. Guests may need to tap **Enable audio**.
 
-- **Create Room** → pick an audio file → press play.
-- On another device (same network) open the shared link or enter the room code → **Join Room**.
-
-> **Testing on multiple physical devices?** They must reach the signaling
-> server. Either deploy the Worker (below) or run the dev server and open the
-> app via your machine's LAN IP over HTTPS, then set the signaling URL with
-> `?signal=ws://<LAN-IP>:8787/api/room`. (Browsers require a secure context for
-> WebRTC/Web Audio on non-localhost origins — deploying is the simplest path.)
-
----
-
-## ☁️ Deploy signaling to Cloudflare Workers
-
-Durable Objects require the **Workers Paid plan** *or* are available on the free
-plan in many accounts — check your dashboard. Deployment itself is free-tier
-friendly.
+The local server binds loopback, so another phone cannot use your laptop's localhost. Physical LAN tests require trusted HTTPS/WSS or your deployed infrastructure. Never use plaintext ws from an HTTPS page.
 
 ```bash
-cd backend
-npx wrangler login
-npx wrangler deploy        # deploys worker.js + RoomDO durable object
+npm test
+npm run lint
+npm run build
+npm run test:browser
 ```
 
-Your signaling endpoint becomes:
+The `lint` command verifies syntax/imports/assets, not ESLint or static types. Build creates a verified static ES-module artifact in `dist/` with a content-derived service-worker revision. Deploy **only dist**, not repository root.
 
-```
-wss://wavesync-signal.<your-subdomain>.workers.dev/api/room
-```
+On Android shared storage: `npm install --ignore-scripts --bin-links=false`. Debian PRoot Chromium tests may require `WAVESYNC_PROOT_BROWSER=1 npm run test:browser`; see development notes for the explicitly approved local test-only sandbox exception.
 
-### Point the PWA at your Worker
+## Signaling and deployment
 
-The frontend auto-resolves the signaling URL (`src/config.js`):
+Local default: `ws://localhost:8787/api/room`. Production fallback preserves the project's public Worker at `wss://wavesync-signal.dharshandcu.workers.dev/api/room`. To use your own service, set Connection & appearance → Signaling endpoint or use `?signal=wss://.../api/room`. Invitation links retain the chosen endpoint; they never include private resume tokens.
 
-1. `?signal=wss://…` query parameter (highest priority)
-2. `localStorage['wavesync.signal']`
-3. **Auto:** same-origin `/api/room` in production, `ws://localhost:8787/api/room` on localhost.
+**The re-engineered frontend and backend must be deployed together.** The public Worker may still run the old protocol until its owner deploys the matching backend. Local verification does not establish production endpoint compatibility. No paid service or production deployment is required for local work.
 
-**Cloudflare Pages + Workers (recommended):** host the static files on
-**Cloudflare Pages** and add a route so `/api/room` on your Pages domain maps to
-the Worker (Workers Routes or a `_routes`/service binding). Then the app uses
-`wss://<your-domain>/api/room` automatically — no config needed.
+See [DEPLOYMENT.md](DEPLOYMENT.md) before publishing. STUN helps direct connectivity but is not TURN; cross-NAT or client-isolated Wi-Fi can fail. Host-star upload grows with guest count; the room limit is eight guests.
 
-**Quick alternative:** host static files anywhere and append the signaling URL:
+## Timing and Wi-Fi limitations
 
-```
-https://your-app.pages.dev/?signal=wss://wavesync-signal.<sub>.workers.dev/api/room
-```
+Clock calibration maps monotonic local timestamps to server time using independent midpoint samples, with an explicitly symmetric-path assumption and uncertainty. Playback uses the Web Audio clock, output timestamp mapping where available, and bounded gradual/hard correction. Rate adjustment can alter pitch. Browser latency APIs are implementation estimates, not external acoustic calibration.
 
-You can also uncomment the `[assets]` block in `wrangler.toml` to serve the PWA
-from the same Worker origin.
+Ordinary browsers do not expose RSSI, Wi-Fi link speed, frequency band/channel, PHY or congestion. Optional Network Information API downlink/effectiveType/saveData are coarse estimates. Actual transfer throughput/stalls and matched peer delivery variation guide buffering/timeouts/preloading. RTT is not a direct Wi-Fi-quality or output-latency measurement. Native Android/desktop Wi-Fi instrumentation would require a separate native boundary and permission/API review; none is fabricated or required here.
 
----
+## Reliability and privacy
 
-## 🧠 How synchronization works
+Server validates host role/identity, host↔guest signaling, epochs, track identity, sequences and bounded payloads. File and decoded-memory budgets help low-memory devices, but decode checking occurs after the browser allocates PCM. Signaling carries metadata/names and coordination; audio remains direct P2P. Local preferences/history remain in the current browser and can be cleared using site-data controls.
 
-1. **Shared clock.** Every client runs an NTP-style exchange with the signaling
-   server (`t0` sent, server replies with `t1`, client stamps `t2`). Offset =
-   `t1 − (t0+t2)/2`; the lowest-RTT sample wins. `clock.now()` = a shared GMT
-   estimate on all devices.
-2. **Host-authoritative timeline.** On every play/pause/seek (plus a 2 s
-   heartbeat) the host broadcasts `{ playing, position, atServerTime, seq }`.
-3. **Guest scheduling.** Guests decode the transferred audio locally and play it
-   via `AudioBufferSourceNode` — sample-accurate and immune to timer jitter.
-   `expectedPosition = position + (clock.now() − atServerTime)`.
-4. **Drift control (every 0.1 s).** `error = localPosition − expectedPosition`.
-   - `|error| < 20 ms` → do nothing.
-   - `20 ms–250 ms` → smoothly nudge `playbackRate` (±4%) to converge.
-   - `> 250 ms` → hard reseek to the exact position.
+Room resume is in-memory and time-limited. Node/Cloudflare object restart loses room state and requires a fresh room. Offline shell does not mean offline room functionality. Background playback, mobile interruptions, real Wi-Fi/output-device conditions and acoustic divergence need physical testing.
 
-Audio bytes move **peer-to-peer** over WebRTC DataChannels; the server only
-relays tiny signaling/clock/control messages.
+## Documentation
 
----
+- [Architecture and audio/sync pipeline](ARCHITECTURE.md)
+- [Development and PRoot environment](DEVELOPMENT.md)
+- [Tests and physical-device acceptance matrix](TESTING.md)
+- [Deployment and protocol migration](DEPLOYMENT.md)
+- [Unreleased engineering changes](CHANGELOG.md)
 
-## ✅ MVP checklist
+## License
 
-| Capability | Where |
-|---|---|
-| Local audio selection | `app.js › onFile` |
-| Audio playback | `audio-engine.js` |
-| Room creation / joining | `app.js`, `worker.js`, `dev-server.js` |
-| WebRTC connection | `network.js › Peer` |
-| Live audio transmission (P2P) | `network.js › sendFile / DataChannel` |
-| Playback synchronization | `sync-engine.js › SyncController` |
-| Clock synchronization | `sync-engine.js › ClockSync` |
-| Drift correction | `SyncController._tick` |
-| Buffering | progressive DataChannel transfer + `guest-buffer` UI |
-| Reconnection | `network.js › SignalClient` backoff |
-| PWA installation | `manifest.json`, `sw.js` |
-| Responsive UI | `styles.css` |
-| Build integrity | pure ES modules, no build step |
-
----
-
-## 🔒 Security notes
-
-- Room codes use an unambiguous 6-char alphabet; guests can only join an
-  existing room.
-- **Control messages are host-only** — the server drops `control` frames from
-  non-host sessions (host-authoritative).
-- All inputs are validated (code regex, message shape, name length caps).
-- Works over **HTTPS/WSS**; WebRTC is DTLS-encrypted by default.
-
----
-
-## 🌐 Browser support
-
-Chromium (Chrome/Edge/Brave), Firefox, and Safari 15+. FLAC/Opus decoding
-depends on the browser's `decodeAudioData` support. iOS requires a user gesture
-to start audio (handled: playback begins after a tap).
-
----
-
-## 📄 License
-
-[MIT](./LICENSE) © WaveSync contributors.
+[MIT](LICENSE). Existing WaveSync branding and optional support information are retained.
