@@ -1,79 +1,163 @@
-/**
- * WaveSync local dev signaling server (Node + ws).
- * Mirrors the Cloudflare Worker/Durable Object protocol so you can test the
- * full app locally before deploying to Cloudflare.
- *
- *   node backend/dev-server.js         # listens on ws://localhost:8787/api/room
- *   PORT=9000 node backend/dev-server.js
- */
-import { WebSocketServer } from 'ws';
+import http from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { WebSocket, WebSocketServer } from 'ws';
 
-const PORT = process.env.PORT ? Number(process.env.PORT) : 8787;
-const CODE_RE = /^[A-Z0-9]{4,8}$/;
+import { RoomState } from './room-state.js';
+import { LIMITS, validCode } from '../shared/protocol.js';
 
-const rooms = new Map(); // code -> { hostId, clients: Map(id -> {ws, role, name}) }
+const HEARTBEAT_MS = 30_000;
+const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 
-const wss = new WebSocketServer({ port: PORT, path: '/api/room' });
-console.log(`[wavesync] signaling server on ws://localhost:${PORT}/api/room`);
+function json(response, status, body) {
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  response.end(JSON.stringify(body));
+}
 
-wss.on('connection', (ws, req) => {
-  const url = new URL(req.url, 'http://localhost');
-  const code = (url.searchParams.get('code') || '').toUpperCase();
-  if (!CODE_RE.test(code)) { ws.close(1008, 'Invalid room code'); return; }
-
-  if (!rooms.has(code)) rooms.set(code, { hostId: null, clients: new Map() });
-  const room = rooms.get(code);
-  const id = randomUUID();
-  let session = null;
-
-  const send = (obj) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj)); };
-  const sendToId = (tid, obj) => { const c = room.clients.get(tid); if (c && c.ws.readyState === c.ws.OPEN) c.ws.send(JSON.stringify(obj)); };
-  const broadcast = (exceptId, obj) => { for (const [cid, c] of room.clients) if (cid !== exceptId && c.ws.readyState === c.ws.OPEN) c.ws.send(JSON.stringify(obj)); };
-  const clean = (v, fb) => (typeof v === 'string' && v.trim()) ? v.trim().slice(0, 40) : fb;
-
-  ws.on('message', (raw) => {
-    let m; try { m = JSON.parse(raw.toString()); } catch { return; }
-    if (!m || typeof m !== 'object') return;
-
-    switch (m.t) {
-      case 'create':
-        if (room.hostId && room.clients.has(room.hostId)) return send({ t: 'error', msg: 'Room code already in use' });
-        room.hostId = id;
-        session = { ws, role: 'host', name: clean(m.name, 'Host') };
-        room.clients.set(id, session);
-        send({ t: 'created', code, id, role: 'host' });
-        break;
-      case 'join':
-        if (!room.hostId || !room.clients.has(room.hostId)) return send({ t: 'error', msg: 'Room not found' });
-        session = { ws, role: 'guest', name: clean(m.name, 'Guest') };
-        room.clients.set(id, session);
-        send({ t: 'joined', code, id, role: 'guest', host: room.hostId });
-        sendToId(room.hostId, { t: 'peer-join', id, role: 'guest', name: session.name });
-        break;
-      case 'time':
-        send({ t: 'time', t0: m.t0, t1: Date.now() });
-        break;
-      case 'signal':
-        if (!session || typeof m.to !== 'string') return;
-        sendToId(m.to, { t: 'signal', from: id, data: m.data });
-        break;
-      case 'control':
-        if (!session || session.role !== 'host') return;
-        broadcast(id, { t: 'control', from: id, data: m.data });
-        break;
-      case 'leave':
-        try { ws.close(1000); } catch (e) {}
-        break;
+function applyEffects(effects) {
+  for (const effect of effects) {
+    const ws = effect.to;
+    if (effect.type === 'send' && ws?.readyState === WebSocket.OPEN) {
+      try { ws.send(JSON.stringify(effect.message)); } catch { /* close/error cleanup owns state */ }
+    } else if (effect.type === 'close' && ws && ws.readyState < WebSocket.CLOSING) {
+      try { ws.close(effect.code, effect.reason); } catch { ws.terminate(); }
     }
+  }
+}
+
+export function createDevServer({
+  port = 8787,
+  host = '127.0.0.1',
+  handshakeTimeoutMs = DEFAULT_HANDSHAKE_TIMEOUT_MS,
+  now = () => Date.now(),
+  uuid = randomUUID
+} = {}) {
+  const rooms = new Map();
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url || '/', `http://${request.headers.host || host}`);
+    if (request.method === 'GET' && url.pathname === '/api/health') {
+      json(response, 200, { ok: true, service: 'wavesync-signal' });
+      return;
+    }
+    if (url.pathname === '/api/room') {
+      response.writeHead(426, { connection: 'close', upgrade: 'websocket', 'cache-control': 'no-store' });
+      response.end('Expected WebSocket');
+      return;
+    }
+    response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+    response.end('Not found');
   });
 
-  const cleanup = () => {
-    room.clients.delete(id);
-    if (id === room.hostId) { room.hostId = null; broadcast(id, { t: 'host-left' }); }
-    else if (room.hostId) sendToId(room.hostId, { t: 'peer-leave', id });
-    if (room.clients.size === 0) rooms.delete(code);
-  };
-  ws.on('close', cleanup);
-  ws.on('error', cleanup);
-});
+  const wss = new WebSocketServer({ noServer: true, maxPayload: LIMITS.signalBytes });
+  const pendingByRoom = new Map();
+  server.wss = wss;
+  server.rooms = rooms;
+
+  server.on('upgrade', (request, socket, head) => {
+    let url;
+    try { url = new URL(request.url || '/', `http://${request.headers.host || host}`); } catch {
+      socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    const code = url.searchParams.get('code') || '';
+    if (url.pathname !== '/api/room') {
+      socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    if (!validCode(code)) {
+      socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nInvalid room code');
+      return;
+    }
+    wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws, request, code));
+  });
+
+  wss.on('connection', (ws, _request, code) => {
+    pendingByRoom.set(code, (pendingByRoom.get(code) || 0) + 1);
+    let pending = true;
+    let room = rooms.get(code);
+    if (!room || room.ended) {
+      room = new RoomState({ code, now, uuid });
+      rooms.set(code, room);
+    }
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
+
+    const handshakeTimer = setTimeout(() => {
+      if (!room.connections.get(ws)?.participantId && ws.readyState === WebSocket.OPEN) ws.close(1008, 'Registration timeout');
+    }, handshakeTimeoutMs);
+    handshakeTimer.unref?.();
+
+    ws.on('message', (raw, isBinary) => {
+      if (isBinary) {
+        applyEffects(room.dispatch(ws, null));
+        return;
+      }
+      let message;
+      try { message = JSON.parse(raw.toString()); } catch {
+        applyEffects(room.dispatch(ws, null));
+        return;
+      }
+      const effects = room.dispatch(ws, message);
+      if (room.connections.get(ws)?.participantId) {
+        clearTimeout(handshakeTimer);
+        if (pending) {
+          pending = false;
+          const count = (pendingByRoom.get(code) || 1) - 1;
+          if (count) pendingByRoom.set(code, count);
+          else pendingByRoom.delete(code);
+        }
+      }
+      applyEffects(effects);
+    });
+
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      clearTimeout(handshakeTimer);
+      if (pending) {
+        pending = false;
+        const count = (pendingByRoom.get(code) || 1) - 1;
+        if (count) pendingByRoom.set(code, count);
+        else pendingByRoom.delete(code);
+      }
+      applyEffects(room.disconnect(ws));
+      if (rooms.get(code) === room && !pendingByRoom.has(code)
+        && (room.participants.size === 0 || room.canDelete())) rooms.delete(code);
+    };
+    ws.on('close', cleanup);
+    ws.on('error', cleanup);
+  });
+
+  const heartbeat = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (!ws.isAlive) {
+        ws.terminate();
+        continue;
+      }
+      ws.isAlive = false;
+      try { ws.ping(); } catch { ws.terminate(); }
+    }
+    for (const [code, room] of rooms) {
+      applyEffects(room.sweep());
+      if (!pendingByRoom.has(code) && room.canDelete()) rooms.delete(code);
+    }
+  }, HEARTBEAT_MS);
+  heartbeat.unref?.();
+
+  server.on('close', () => {
+    clearInterval(heartbeat);
+    wss.close();
+  });
+  server.listen(port, host);
+  return server;
+}
+
+const isDirect = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+if (isDirect) {
+  const port = process.env.PORT ? Number(process.env.PORT) : 8787;
+  const host = process.env.HOST || '127.0.0.1';
+  const server = createDevServer({ port, host });
+  server.on('listening', () => console.log(`[wavesync] signaling server on ws://${host}:${server.address().port}/api/room`));
+}

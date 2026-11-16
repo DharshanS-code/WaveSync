@@ -12,9 +12,8 @@ tag = "v1"
 new_sqlite_classes = ["RoomDO"]
 
 # Optional: serve the PWA static assets from the same Worker so the app and
-# signaling share an origin (then the app auto-uses wss://<host>/api/room).
-# Uncomment after `npm run build` copies the frontend into ./public, or point
-# it at the project root.
+# signaling share an origin. Set the owned WSS endpoint in app Settings.
+# Build from the root with `npm run build`; never publish repository source.
 # [assets]
-# directory = "../"
+# directory = "../dist"
 # binding = "ASSETS"

@@ -1,230 +1,289 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="system" data-accent="coral">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
-  <meta name="theme-color" content="#262323" />
-  <meta name="description" content="WaveSync — play the same music in perfect sync across every device on your network." />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f4f2ef" />
+  <meta name="description" content="WaveSync coordinates local music playback across your devices." />
   <title>WaveSync</title>
   <link rel="manifest" href="./manifest.json" />
   <link rel="apple-touch-icon" href="./assets/icon-512.png" />
   <link rel="icon" type="image/png" href="./assets/icon-512.png" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./src/styles.css" />
 </head>
 <body>
-  <div id="app" class="app">
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="icon-arrow-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></symbol>
+    <symbol id="icon-audio" viewBox="0 0 24 24"><path d="M9 18V5l10-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="16" cy="16" r="3" /></symbol>
+    <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></symbol>
+    <symbol id="icon-chevron-up" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6" /></symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></symbol>
+    <symbol id="icon-devices" viewBox="0 0 24 24"><rect x="3" y="5" width="13" height="10" rx="2" /><path d="M8 19h3m8-9h2v9h-6v-2" /></symbol>
+    <symbol id="icon-heart" viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z" /></symbol>
+    <symbol id="icon-next" viewBox="0 0 24 24"><path d="m6 5 10 7L6 19V5Zm11 0v14" /></symbol>
+    <symbol id="icon-pause" viewBox="0 0 24 24"><path d="M8 5v14m8-14v14" /></symbol>
+    <symbol id="icon-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z" /></symbol>
+    <symbol id="icon-previous" viewBox="0 0 24 24"><path d="m18 5-10 7 10 7V5ZM7 5v14" /></symbol>
+    <symbol id="icon-repeat" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4" /><path d="M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4" /><path d="M21 13v2a3 3 0 0 1-3 3H3" /></symbol>
+    <symbol id="icon-share" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><path d="m8.6 10.5 6.8-4m-6.8 7 6.8 4" /></symbol>
+    <symbol id="icon-shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5m0-5-6 6M4 7h3l10 10h4" /><path d="M4 17h3l2.5-2.5M18 16l3 3-3 3" /></symbol>
+    <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M4 7h16m-10 4v6m4-6v6M9 7l1-3h4l1 3m3 0-1 13H7L6 7" /></symbol>
+    <symbol id="icon-upload" viewBox="0 0 24 24"><path d="M12 16V4m-5 5 5-5 5 5M5 20h14" /></symbol>
+    <symbol id="icon-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Zm4 5a3 3 0 0 1 0 4m2-7a7 7 0 0 1 0 10" /></symbol>
+    <symbol id="icon-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></symbol>
+  </svg>
 
-    <!-- ================= HOME ================= -->
-    <section class="screen screen--home is-active" data-screen="home">
-      <header class="brand">
-        <div class="brand__logo" aria-hidden="true">
-          <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+  <main id="app" class="app-shell">
+    <section id="home-screen" class="screen home-screen is-active" data-screen="home" aria-labelledby="home-title">
+      <div class="home-card">
+        <header class="brand-block">
+          <img class="brand-icon" src="./assets/icon-512.png" alt="" width="72" height="72" />
+          <div>
+            <h1 id="home-title" tabindex="-1">WaveSync</h1>
+            <p>Play local music together, in the same room.</p>
+          </div>
+        </header>
+
+        <div id="home-network" class="notice notice--compact" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="home-network-text">Checking connection…</span>
         </div>
-        <h1 class="brand__name">WaveSync</h1>
-        <p class="brand__tag">One song. Every device. In sync.</p>
+
+        <form id="create-form" class="home-form" data-form-action="create">
+          <label for="display-name">Your device name</label>
+          <input id="display-name" name="name" type="text" autocomplete="nickname" maxlength="40" placeholder="For example, Kitchen iPad" />
+          <button id="create-room" class="button button--primary button--wide" type="submit" data-action="create">
+            Create a room
+          </button>
+        </form>
+
+        <div class="divider" aria-hidden="true"><span>or join one</span></div>
+
+        <form id="join-form" class="home-form home-form--join" data-form-action="join">
+          <label for="join-code">Room code</label>
+          <div class="join-row">
+            <input id="join-code" name="code" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" minlength="4" maxlength="12" required placeholder="ABC123" aria-describedby="home-error" />
+            <button id="join-room" class="button button--secondary" type="submit" data-action="join">Join room</button>
+          </div>
+        </form>
+        <p id="home-error" class="form-error" role="alert" aria-live="assertive"></p>
+
+        <details id="home-settings" class="details-panel">
+          <summary>Connection &amp; appearance</summary>
+          <div class="settings-grid">
+            <div class="field-group field-group--wide">
+              <label for="signal-url">Signaling endpoint</label>
+              <div class="inline-field">
+                <input id="signal-url" type="url" inputmode="url" autocomplete="url" placeholder="wss://example.com" aria-describedby="signal-help signal-error" />
+                <button id="save-signal" class="button button--secondary" type="button" data-action="signal">Apply</button>
+              </div>
+              <small id="signal-help">Rooms need a reachable secure WebSocket endpoint.</small>
+              <p id="signal-error" class="form-error" role="alert" aria-live="assertive"></p>
+            </div>
+            <div class="field-group">
+              <label for="theme-select">Theme</label>
+              <select id="theme-select" data-action="theme">
+                <option value="system">System</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="accent-select">Accent</label>
+              <select id="accent-select" data-action="accent">
+                <option value="coral">Coral</option>
+                <option value="rose">Rose</option>
+                <option value="amber">Amber</option>
+              </select>
+            </div>
+          </div>
+        </details>
+
+        <div class="update-actions" aria-label="Application updates">
+          <button id="install-app" class="button button--secondary" type="button" data-action="install" hidden>Install WaveSync</button>
+          <button id="update-app" class="button button--secondary" type="button" data-action="update" hidden>Update available</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="room-screen" class="screen room-screen" data-screen="room" aria-labelledby="room-title" hidden>
+      <header class="room-header">
+        <button id="leave-room" class="icon-button icon-button--text" type="button" data-action="leave" aria-label="Leave room">
+          <svg aria-hidden="true"><use href="#icon-arrow-left" /></svg><span>Leave</span>
+        </button>
+        <div class="room-heading">
+          <p id="room-role" class="eyebrow">Room</p>
+          <h1 id="room-title" tabindex="-1">WaveSync room</h1>
+        </div>
+        <div id="connection-pill" class="status-pill" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span><span id="connection-text">Connecting…</span>
+        </div>
       </header>
 
-      <div class="home__actions">
-        <button class="clay-btn clay-btn--primary" id="btn-create" data-testid="home-create-room-btn">
-          <span class="clay-btn__icon">New</span>
-          <span class="clay-btn__label">Create Room</span>
-          <span class="clay-btn__sub">Host & pick the music</span>
-        </button>
+      <div class="room-layout">
+        <section class="surface player-panel" aria-labelledby="track-title">
+          <div class="invitation">
+            <div>
+              <span class="eyebrow">Room code</span>
+              <strong id="room-code">—</strong>
+            </div>
+            <div class="invitation-actions">
+              <button id="copy-room" class="icon-button" type="button" data-action="copy" aria-label="Copy invitation link" disabled>
+                <svg aria-hidden="true"><use href="#icon-copy" /></svg>
+              </button>
+              <button id="share-room" class="icon-button" type="button" data-action="share" aria-label="Share room invitation" disabled>
+                <svg aria-hidden="true"><use href="#icon-share" /></svg>
+              </button>
+            </div>
+          </div>
 
-        <button class="clay-btn clay-btn--accent" id="btn-open-join" data-testid="home-join-room-btn">
-          <span class="clay-btn__icon">Join</span>
-          <span class="clay-btn__label">Join Room</span>
-          <span class="clay-btn__sub">Enter a room code</span>
-        </button>
-      </div>
+          <div class="now-playing">
+            <div id="track-art" class="track-art" aria-hidden="true">
+              <img src="./assets/icon-512.png" alt="" width="72" height="72" />
+            </div>
+            <div class="track-copy">
+              <span id="track-kicker" class="eyebrow">Nothing playing</span>
+              <h2 id="track-title">No track selected</h2>
+              <p id="track-artist">Choose local audio to begin.</p>
+            </div>
+          </div>
 
-      <!-- Join panel -->
-      <div class="clay-card join-panel" id="join-panel" hidden>
-        <label class="field-label" for="join-code">Room code</label>
-        <input id="join-code" class="clay-input" inputmode="latin" autocomplete="off"
-               maxlength="7" placeholder="ABC123" data-testid="join-code-input" />
-        <input id="join-name" class="clay-input" placeholder="Your name (optional)" data-testid="join-name-input" />
-        <button class="clay-btn clay-btn--primary" id="btn-join" data-testid="join-submit-btn">Join Room</button>
-        <p class="join-error" id="join-error" data-testid="join-error"></p>
-      </div>
+          <div id="transfer-state" class="transfer-state" role="status" aria-live="polite" hidden>
+            <div class="transfer-copy"><span id="transfer-text">Preparing audio…</span><span id="transfer-value"></span></div>
+            <progress id="transfer-progress" max="100" value="0">0%</progress>
+          </div>
 
-      <footer class="home__footer">
-        <span id="conn-dot" class="conn-dot" data-testid="signal-status"></span>
-        <span id="conn-text">Ready</span>
-      </footer>
-    </section>
+          <div id="audio-permission" class="permission-panel" hidden>
+            <div>
+              <strong>Enable audio on this device</strong>
+              <p>Your browser needs a tap before it can play room audio.</p>
+            </div>
+            <button id="enable-audio" class="button button--primary" type="button" data-action="enableAudio">Enable audio</button>
+          </div>
 
-    <!-- ================= HOST PLAYER ================= -->
-    <section class="screen screen--player" data-screen="host">
-      <div class="player__top">
-        <button class="icon-btn" data-action="leave" data-testid="host-back-btn" title="Back" aria-label="Back">Back</button>
-        <div class="room-chip" data-testid="host-room-chip">
-          <span class="room-chip__label">ROOM</span>
-          <span class="room-chip__code" id="host-code" data-testid="host-room-code">------</span>
+          <div class="timeline">
+            <span id="position-time">0:00</span>
+            <div class="timeline-control">
+              <input id="seek-control" type="range" min="0" max="1" value="0" step="0.01" data-action="seek" aria-label="Track position" disabled />
+              <progress id="guest-progress" max="1" value="0" aria-label="Track progress" hidden>0%</progress>
+            </div>
+            <span id="duration-time">0:00</span>
+          </div>
+
+          <div class="transport" data-host-only>
+            <button id="previous-track" class="transport-button" type="button" data-action="previous" aria-label="Previous track" disabled>
+              <svg aria-hidden="true"><use href="#icon-previous" /></svg>
+            </button>
+            <button id="play-toggle" class="play-button" type="button" data-action="play" aria-label="Play" disabled>
+              <svg aria-hidden="true"><use id="play-toggle-icon" href="#icon-play" /></svg>
+            </button>
+            <button id="next-track" class="transport-button" type="button" data-action="next" aria-label="Next track" disabled>
+              <svg aria-hidden="true"><use href="#icon-next" /></svg>
+            </button>
+          </div>
+
+          <div class="player-tools">
+            <label class="volume-control" for="volume-control">
+              <svg aria-hidden="true"><use href="#icon-volume" /></svg>
+              <span class="sr-only">Local volume</span>
+              <input id="volume-control" type="range" min="0" max="1" value="1" step="0.01" data-action="volume" aria-label="Local volume" />
+            </label>
+            <div class="host-tools" data-host-only>
+              <button id="shuffle-toggle" class="tool-button" type="button" data-action="shuffle" aria-pressed="false">
+                <svg aria-hidden="true"><use href="#icon-shuffle" /></svg><span>Shuffle</span>
+              </button>
+              <button id="repeat-toggle" class="tool-button" type="button" data-action="repeat" aria-label="Repeat off" data-value="off">
+                <svg aria-hidden="true"><use href="#icon-repeat" /></svg><span id="repeat-label">Repeat</span>
+              </button>
+            </div>
+            <button id="resync-room" class="button button--secondary" type="button" data-action="resync" data-guest-only>Resync</button>
+          </div>
+
+          <p id="playback-status" class="playback-status" role="status" aria-live="polite">Waiting for a room.</p>
+          <input id="audio-files" type="file" accept="audio/*,.mp3,.aac,.wav,.ogg,.opus,.flac,.m4a" multiple hidden data-action="files" />
+          <label id="add-files" class="button button--secondary button--wide file-button" for="audio-files" data-host-only>
+            <svg aria-hidden="true"><use href="#icon-upload" /></svg><span>Add local music</span>
+          </label>
+        </section>
+
+        <div class="room-sidebar">
+          <section class="surface queue-panel" aria-labelledby="queue-title" data-host-only>
+            <div class="section-heading">
+              <div><span class="eyebrow">Playlist</span><h2 id="queue-title">Up next</h2></div>
+              <span id="queue-count" class="count-label">0 tracks</span>
+            </div>
+            <p id="queue-empty" class="empty-state">No music queued yet.</p>
+            <ol id="queue-list" class="queue-list" aria-label="Room queue"></ol>
+          </section>
+
+          <section class="surface devices-panel" aria-labelledby="devices-title">
+            <div class="section-heading">
+              <div><span class="eyebrow">In this room</span><h2 id="devices-title">Devices</h2></div>
+              <svg class="section-icon" aria-hidden="true"><use href="#icon-devices" /></svg>
+            </div>
+            <p id="devices-empty" class="empty-state">No connected devices reported.</p>
+            <ul id="devices-list" class="devices-list" aria-label="Connected devices"></ul>
+          </section>
+
+          <details id="room-details" class="surface details-panel room-details">
+            <summary>Settings &amp; troubleshooting</summary>
+            <div class="diagnostics">
+              <div><span>Host</span><strong id="host-name">Unknown</strong></div>
+              <div><span>Sync</span><strong id="sync-text">Unavailable</strong></div>
+              <div><span>Network</span><strong id="network-text">Unavailable</strong></div>
+            </div>
+            <p id="offline-help" class="notice" hidden>WaveSync rooms need a network connection. Check Wi-Fi or mobile data, then reconnect.</p>
+            <p class="capability-note">Browser APIs may not expose Wi-Fi band, congestion, Bluetooth latency, or the selected audio output. Unavailable values are not estimated.</p>
+            <div class="settings-grid">
+              <div class="field-group">
+                <label for="room-theme-select">Theme</label>
+                <select id="room-theme-select" data-action="theme">
+                  <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="room-accent-select">Accent</label>
+                <select id="room-accent-select" data-action="accent">
+                  <option value="coral">Coral</option><option value="rose">Rose</option><option value="amber">Amber</option>
+                </select>
+              </div>
+            </div>
+          </details>
         </div>
-        <button class="icon-btn" data-action="share" data-testid="host-share-btn" title="Share link" aria-label="Share">Share</button>
-      </div>
-
-      <div class="artwork" data-testid="host-artwork">
-        <div class="artwork__glow"></div>
-        <div class="artwork__disc" id="host-disc">
-          <div class="artwork__wave"><span></span><span></span><span></span><span></span><span></span></div>
-        </div>
-      </div>
-
-      <div class="track">
-        <h2 class="track__title" id="host-title" data-testid="host-track-title">No track loaded</h2>
-        <p class="track__meta" id="host-sub" data-testid="host-track-sub">Pick a song from your device</p>
-      </div>
-
-      <div class="seek">
-        <span class="seek__time" id="host-cur">0:00</span>
-        <input type="range" class="clay-range" id="host-seek" min="0" max="1000" value="0" step="1" data-testid="host-seek" />
-        <span class="seek__time" id="host-dur">0:00</span>
-      </div>
-
-      <div class="transport">
-        <label class="clay-btn clay-btn--ghost file-pick" data-testid="host-pick-file">
-          <input type="file" id="host-file" accept="audio/*,.mp3,.aac,.wav,.ogg,.opus,.flac,.m4a" multiple hidden />
-          <span>Add songs</span>
-        </label>
-        <button class="icon-btn" id="host-prev" data-testid="host-prev-btn" title="Previous">Prev</button>
-        <button class="play-btn" id="host-play" data-testid="host-play-btn" disabled>
-          <span class="play-btn__icon" id="host-play-icon">Play</span>
-        </button>
-        <button class="icon-btn" id="host-next" data-testid="host-next-btn" title="Next">Next</button>
-        <div class="vol">
-          <span class="vol__icon">Vol</span>
-          <input type="range" class="clay-range clay-range--sm" id="host-vol" min="0" max="100" value="100" data-testid="host-volume" />
-        </div>
-      </div>
-
-      <ul class="queue" id="host-queue" data-testid="host-queue"></ul>
-
-      <div class="clay-card status-card">
-        <div class="status-row">
-          <span class="status-row__k">Devices</span>
-          <span class="status-row__v" id="host-devices" data-testid="host-device-count">1</span>
-        </div>
-        <div class="status-row">
-          <span class="status-row__k">Sync</span>
-          <span class="status-row__v badge badge--host" id="host-sync" data-testid="host-sync-status">Host clock</span>
-        </div>
-        <div class="status-row">
-          <span class="status-row__k">Clock offset</span>
-          <span class="status-row__v" id="host-offset" data-testid="host-offset">—</span>
-        </div>
-      </div>
-    </section>
-
-    <!-- ================= GUEST PLAYER ================= -->
-    <section class="screen screen--player" data-screen="guest">
-      <div class="player__top">
-        <button class="icon-btn" data-action="leave" data-testid="guest-back-btn" title="Back" aria-label="Back">Back</button>
-        <div class="room-chip">
-          <span class="room-chip__label">ROOM</span>
-          <span class="room-chip__code" id="guest-code" data-testid="guest-room-code">------</span>
-        </div>
-      </div>
-
-      <div class="artwork" data-testid="guest-artwork">
-        <div class="artwork__glow"></div>
-        <div class="artwork__disc" id="guest-disc">
-          <div class="artwork__wave"><span></span><span></span><span></span><span></span><span></span></div>
-        </div>
-      </div>
-
-      <div class="track">
-        <h2 class="track__title" id="guest-title" data-testid="guest-track-title">Waiting for host…</h2>
-        <p class="track__meta" id="guest-sub" data-testid="guest-track-sub">Connecting to room</p>
-      </div>
-
-      <div class="seek seek--readonly">
-        <span class="seek__time" id="guest-cur">0:00</span>
-        <div class="clay-progress"><div class="clay-progress__fill" id="guest-progress"></div></div>
-        <span class="seek__time" id="guest-dur">0:00</span>
-      </div>
-
-      <div class="guest-state" id="guest-playstate" data-testid="guest-playstate">
-        <span class="guest-state__dot"></span><span id="guest-playstate-text">Idle</span>
-      </div>
-
-      <div class="clay-card status-card">
-        <div class="status-row">
-          <span class="status-row__k">Connection</span>
-          <span class="status-row__v badge" id="guest-conn" data-testid="guest-connection-status">Connecting…</span>
-        </div>
-        <div class="status-row">
-          <span class="status-row__k">Sync error</span>
-          <span class="status-row__v" id="guest-err" data-testid="guest-sync-error">—</span>
-        </div>
-        <div class="status-row">
-          <span class="status-row__k">Buffer</span>
-          <span class="status-row__v" id="guest-buffer" data-testid="guest-buffer">0%</span>
-        </div>
-        <div class="status-row">
-          <span class="status-row__k">RTT</span>
-          <span class="status-row__v" id="guest-rtt" data-testid="guest-rtt">—</span>
-        </div>
-      </div>
-      <div class="guest-vol">
-        <span class="vol__icon">Vol</span>
-        <input type="range" class="clay-range clay-range--sm" id="guest-vol" min="0" max="100" value="100" data-testid="guest-volume" />
       </div>
     </section>
+  </main>
 
-  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
 
-  <div class="toast" id="toast" data-testid="toast" hidden></div>
-
-  <!-- Calibration / warm-up -->
-  <div class="calib" id="calibration" data-testid="calibration" hidden>
-    <div class="calib__orb"><div class="calib__pulse"><span></span><span></span><span></span></div></div>
-    <h2 class="calib__title" id="calib-title">Calibrating sync</h2>
-    <ul class="calib__steps" id="calib-steps"></ul>
-    <div class="calib__metric" id="calib-metric" data-testid="calib-metric">Measuring latency…</div>
-  </div>
-
-  <!-- Support me -->
-  <button class="support-fab" id="support-fab" data-testid="support-fab" aria-label="Support me">
-    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-    <span>Support</span>
+  <button class="support-fab" id="support-fab" type="button" aria-label="Support WaveSync" aria-haspopup="dialog" aria-controls="support-overlay" aria-expanded="false">
+    <svg aria-hidden="true"><use href="#icon-heart" /></svg><span>Support</span>
   </button>
 
-  <div class="support-overlay" id="support-overlay" data-testid="support-overlay" hidden>
-    <div class="support-modal clay-card" role="dialog" aria-modal="true" aria-label="Support WaveSync">
-      <button class="support-close" id="support-close" data-testid="support-close" aria-label="Close">✕</button>
-      <h3 class="support-title">Support WaveSync</h3>
-      <p class="support-sub">Made with ♥ by Dharshan S. If WaveSync helped you, a small tip keeps it free &amp; open-source.</p>
-
+  <div class="support-overlay" id="support-overlay" hidden>
+    <div class="support-modal" role="dialog" aria-modal="true" aria-labelledby="support-title">
+      <button class="icon-button support-close" id="support-close" type="button" aria-label="Close support dialog">
+        <svg aria-hidden="true"><use href="#icon-x" /></svg>
+      </button>
+      <div class="support-heading">
+        <span class="eyebrow">Keep it independent</span>
+        <h2 id="support-title">Support WaveSync</h2>
+        <p>Made by Dharshan S. A small tip helps keep WaveSync free and open source.</p>
+      </div>
       <div class="support-upi">
-        <div class="support-qr">
-          <img src="./assets/upi-qr.png" alt="Scan to pay via UPI" data-testid="support-qr" />
-        </div>
-        <div class="support-upi__info">
-          <span class="support-upi__label">UPI ID</span>
-          <span class="support-upi__id" data-testid="support-upi-id">dharshandcu@nyes</span>
-          <span class="support-upi__name">Dharshan S</span>
-          <div class="support-upi__actions">
-            <button class="support-btn support-btn--primary" id="support-copy" data-testid="support-copy-upi">Copy UPI ID</button>
-            <a class="support-btn" href="upi://pay?pa=dharshandcu@nyes&amp;pn=Dharshan%20S&amp;cu=INR" data-testid="support-pay">Pay via UPI app</a>
-          </div>
+        <div class="support-qr"><img src="./assets/upi-qr.png" alt="UPI payment QR code" width="152" height="152" /></div>
+        <div class="support-upi-copy">
+          <span class="eyebrow">UPI ID</span>
+          <strong id="support-upi-id">dharshandcu@nyes</strong>
+          <span>Dharshan S</span>
+          <button class="button button--primary" id="support-copy" type="button">Copy UPI ID</button>
+          <a class="button button--secondary" href="upi://pay?pa=dharshandcu@nyes&amp;pn=Dharshan%20S&amp;cu=INR">Pay with UPI app</a>
         </div>
       </div>
-
-      <div class="support-links">
-        <a class="support-link" href="https://instagram.com/dharshandcu" target="_blank" rel="noopener" data-testid="support-instagram">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="5.5"/><circle cx="12" cy="12" r="4"/><circle cx="17.6" cy="6.4" r="1.2" fill="currentColor" stroke="none"/></svg>
-          Instagram
-        </a>
-        <a class="support-link" href="https://github.com/DharshanS-code/WaveSync" target="_blank" rel="noopener" data-testid="support-github">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17 4.6 18 4.9 18 4.9c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
-          GitHub
-        </a>
-      </div>
+      <nav class="support-links" aria-label="WaveSync links">
+        <a href="https://instagram.com/dharshandcu" target="_blank" rel="noopener">Instagram</a>
+        <a href="https://github.com/DharshanS-code/WaveSync" target="_blank" rel="noopener">GitHub</a>
+      </nav>
     </div>
   </div>
 

@@ -75,61 +75,70 @@ export class ClockSynchronizer extends Emitter {
   constructor(cfg = {}) {
     super();
     this.window = cfg.clockWindow || 30;
-    this.alpha = cfg.clockEmaAlpha || 0.15;
-    this.offset = 0;        // serverClock - localClock (ms)
-    this.rtt = Infinity;    // best (lowest) round-trip time (ms)
-    this.jitter = 0;        // rtt standard deviation (ms)
-    this.confidence = 0;    // 0..1 quality score
-    this.synced = false;
-    this._samples = [];     // { rtt, offset }
+    this._now = cfg.now || (() => performance.now());
     this._minSamples = cfg.calibMinSamples || 5;
-    this.kalman = new KalmanOffsetFilter(cfg.clockProcessNoise);
+    this._samples = [];
+    this.offset = 0;
+    this.rtt = Infinity;
+    this.jitter = 0;
+    this.confidence = 0;
+    this.uncertaintyMs = Infinity;
+    this.synced = false;
+    this._lastNow = 0;
+    this._lastSample = -Infinity;
   }
 
-  /** Ingest one round trip. t0 = send (local), t1 = server, t2 = recv (local). */
-  addSample(t0, t1, t2) {
-    const rtt = t2 - t0;
-    if (rtt < 0 || !isFinite(rtt)) return this.quality();
-    const rawOffset = t1 - (t0 + t2) / 2;
-    this._samples.push({ rtt, offset: rawOffset });
+  /** Map monotonic local time to server time. Four timestamps remove server processing.
+   * Midpoint assumes symmetric paths; uncertainty is NOT measured one-way latency. */
+  addSample(t0, t1, t2, t3 = t1) {
+    if (![t0, t1, t2, t3].every(Number.isFinite) || t2 < t0 || t3 < t1 ||
+        t2 - t0 > 10000 || t3 - t1 > t2 - t0 ||
+        this._samples.some(s => s.t0 === t0)) return this.quality();
+    const rtt = t2 - t0 - (t3 - t1);
+    const offset = (t1 + t3 - t0 - t2) / 2;
+    if (this._samples.length && Math.abs(offset - this.offset) > 2000) this.reset();
+    this._samples.push({ t0, rtt, offset });
     if (this._samples.length > this.window) this._samples.shift();
-
-    const rtts = this._samples.map((s) => s.rtt);
-    const med = median(rtts);
-    const kept = this._samples.filter((s) => s.rtt <= med * 2.5 + 5); // reject spikes
-    let best = kept[0];
-    for (const s of kept) if (s.rtt < best.rtt) best = s;
-
-    const measVar = Math.max(1, (best.rtt * best.rtt) / 4); // trust low-RTT samples more
-    this.offset = this.kalman.update(best.offset, measVar);
-    if (!this.synced) { this.synced = true; this.emit('sync', this.quality()); }
-
-    this.rtt = best.rtt;
-    this.jitter = stddev(rtts);
-    this.confidence = clamp(kept.length / this._minSamples, 0, 1) * clamp(1 - this.jitter / 150, 0, 1);
-
+    const ordered = [...this._samples].sort((a, b) => a.rtt - b.rtt);
+    const kept = ordered.slice(0, Math.max(this._minSamples, Math.ceil(ordered.length / 2)));
+    // Re-estimate from independent observations, not repeated Kalman updates of one winner.
+    this.offset = median(kept.map(s => s.offset));
+    this.rtt = ordered[0].rtt;
+    this.jitter = stddev(this._samples.map(s => s.rtt));
+    this.uncertaintyMs = this.rtt / 2 + stddev(kept.map(s => s.offset));
+    this.confidence = Math.min(1, this._samples.length / this._minSamples) /
+      (1 + this.uncertaintyMs / 100);
+    const wasSynced = this.synced;
+    this.synced = this._samples.length >= this._minSamples;
+    this._lastSample = this._now();
     const q = this.quality();
+    if (this.synced && !wasSynced) this.emit('sync', q);
     this.emit('update', q);
     return q;
   }
 
-  /** Shared server-time estimate (ms since epoch, GMT). */
-  now() { return Date.now() + this.offset; }
-
-  quality() {
-    return {
-      offset: this.offset, rtt: this.rtt, jitter: this.jitter,
-      confidence: this.confidence, samples: this._samples.length, synced: this.synced
-    };
+  now() {
+    const estimated = this._now() + this.offset;
+    this._lastNow = Math.max(this._lastNow, estimated);
+    return this._lastNow;
   }
 
-  // NOTE: deliberately does NOT touch `this.kalman` — the offset/covariance
-  // estimate is preserved across a reset so a signaling reconnect doesn't
-  // cause an audible re-drift while the fresh calibration burst (see
-  // network.js SignalClient._startClock) re-earns confidence. Only the
-  // per-connection bookkeeping (sample window, confidence, synced flag) is
-  // cleared, which lets 'sync' legitimately refire once the next burst locks.
-  reset() { this._samples = []; this.synced = false; this.confidence = 0; this.rtt = Infinity; }
+  quality() {
+    return { offset: this.offset, rtt: this.rtt, jitter: this.jitter,
+      uncertaintyMs: this.uncertaintyMs, confidence: this.confidence,
+      samples: this._samples.length, synced: this.synced,
+      ageMs: this._now() - this._lastSample, assumption: 'symmetric-path midpoint' };
+  }
+
+  reset() {
+    this._samples = [];
+    this.synced = false;
+    this.confidence = 0;
+    this.rtt = Infinity;
+    this.uncertaintyMs = Infinity;
+    this._lastSample = -Infinity;
+    this._lastNow = 0;
+  }
 }
 
 // Backward-compatible alias.
@@ -292,7 +301,11 @@ export class SyncEngine extends Emitter {
     this._corrEnd = 0;      // ctx-time at which the active correction returns to 0
     this.lastPlan = null;
     this.telemetry = { min: Infinity, max: -Infinity, absSum: 0, n: 0 };
-    this.onStatus = null;   // compatibility callback
+    this.onStatus = null;
+    this.activeTrackId = null;
+    this.epoch = null;
+    this.destroyed = false;
+    this.networkQuality = cfg.networkQuality || null;
 
     this._onVisible = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible' && this.state !== 'idle') {
@@ -333,20 +346,38 @@ export class SyncEngine extends Emitter {
    * AudioBufferSourceNode), which is an audible dropout every
    * `timelineHeartbeatMs` regardless of whether anything actually changed.
    */
+  setEpoch(epoch) {
+    if (epoch === this.epoch) return;
+    this.stop();
+    this.timeline = null;
+    this.activeTrackId = null;
+    this.epoch = epoch;
+  }
+
+  setActiveTrack(trackId) {
+    this.activeTrackId = trackId;
+    this.policy.reset();
+    this._align(true);
+  }
+
   setTimeline(tl) {
-    if (this.timeline && tl.seq != null && this.timeline.seq != null && tl.seq < this.timeline.seq) return;
+    if (this.destroyed || !tl || typeof tl !== 'object' ||
+        typeof tl.epoch !== 'string' || typeof tl.trackId !== 'string' ||
+        typeof tl.playing !== 'boolean' || !Number.isSafeInteger(tl.seq) || tl.seq < 1 ||
+        !Number.isSafeInteger(tl.revision) || tl.revision < 0 ||
+        ![tl.position, tl.atServerTime, tl.duration].every(Number.isFinite) ||
+        tl.position < 0 || tl.duration <= 0 || tl.position > tl.duration ||
+        tl.atServerTime < 0 || tl.atServerTime > 8.64e15 ||
+        (this.epoch && tl.epoch !== this.epoch) ||
+        (this.timeline && tl.seq <= this.timeline.seq)) return false;
     const prev = this.timeline;
-    const isFirst = !prev;
-    const transportChanged = !isFirst && prev.playing !== tl.playing;
-    let discontinuous = isFirst || transportChanged;
-    if (!discontinuous && prev.playing && tl.playing) {
-      const predicted = prev.position + (tl.atServerTime - prev.atServerTime) / 1000;
-      const tol = this.cfg.discontinuityToleranceSec != null ? this.cfg.discontinuityToleranceSec : 0.08;
-      discontinuous = Math.abs(predicted - tl.position) > tol;
-    }
-    this.timeline = tl;
-    this.emit('timeline', tl);
-    this._align(isFirst || transportChanged || discontinuous);
+    const changed = !prev || prev.trackId !== tl.trackId || prev.revision !== tl.revision ||
+      prev.playing !== tl.playing;
+    this.epoch = tl.epoch;
+    this.timeline = { ...tl };
+    this.emit('timeline', this.timeline);
+    this._align(changed);
+    return true;
   }
 
   /** Expected local playback position (s) for the current shared time. */
@@ -354,13 +385,21 @@ export class SyncEngine extends Emitter {
     const tl = this.timeline;
     if (!tl) return 0;
     if (!tl.playing) return tl.position;
-    return tl.position + (this.clock.now() - tl.atServerTime) / 1000;
+    const position = tl.position + (this.clock.now() - tl.atServerTime) / 1000;
+    return Number.isFinite(position) ? clamp(position, 0, tl.duration) : 0;
   }
 
-  start() { this.state = 'armed'; this.controller.reset(); this.policy.reset(); this.health.reset(); this._corrEnd = 0; this.scheduler.start(); this._align(true); }
-  stop() { this.scheduler.stop(); this.state = 'idle'; }
+  start() {
+    if (this.destroyed) return;
+    this.state = 'armed'; this.controller.reset(); this.policy.reset(); this.health.reset();
+    this._corrEnd = 0; this.scheduler.start(); this._align(true);
+  }
+  manualResync() { this._align(true); }
+  stop() { this.scheduler.stop(); this.audio.cancelCorrection(); this.state = 'idle'; }
   destroy() {
     this.stop();
+    this.destroyed = true;
+    this.timeline = null;
     this._unbind.forEach((fn) => fn());
     if (typeof document !== 'undefined' && document.removeEventListener) {
       document.removeEventListener('visibilitychange', this._onVisible);
@@ -368,7 +407,11 @@ export class SyncEngine extends Emitter {
     this.clear();
   }
 
-  ready() { return !!(this.timeline && this.audio.hasAudio() && this.clock.synced); }
+  ready() {
+    return !this.destroyed && this.state !== 'idle' && !!(this.timeline &&
+      this.activeTrackId === this.timeline.trackId && this.audio.hasAudio() &&
+      this.audio.ctx?.state === 'running' && this.clock.synced);
+  }
 
   /** Hard alignment: schedule playback so the HEARD audio lands on expected. */
   _align(force) {
@@ -401,7 +444,8 @@ export class SyncEngine extends Emitter {
     const jitterSec = (this.scheduler.jitterMs || 0) / 1000;
     const mult = this.cfg.leadJitterMultiplier != null ? this.cfg.leadJitterMultiplier : 3;
     const cap = this.cfg.maxLeadSec != null ? this.cfg.maxLeadSec : 0.5;
-    let lead = base + jitterSec * mult;
+    const networkMargin = this.networkQuality?.profile().safetyMarginSec || 0;
+    let lead = Math.max(base, networkMargin) + jitterSec * mult;
     const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
     if (hidden) {
       const floor = this.cfg.backgroundLeadFloorSec != null ? this.cfg.backgroundLeadFloorSec : 0.35;
@@ -413,12 +457,13 @@ export class SyncEngine extends Emitter {
   /** Predictive reseek: schedule start so the heard position hits `target`. */
   _reseek(target) {
     const lead = this._computeLead();
-    const outLat = this.audio.outputLatency();
+    const mapping = this.audio.outputMapping();
+    const when = this.audio.ctx.currentTime + lead;
+    const outputMono = mapping.performanceTime + (when - mapping.contextTime) * 1000;
+    const delaySec = (outputMono - performance.now()) / 1000;
     this.audio.cancelCorrection();
     this.audio.setRate(1);
-    const when = this.audio.ctx ? this.audio.ctx.currentTime + lead : null;
-    // scheduled offset = target + lead + outputLatency  =>  heard(t) == expected(t)
-    this.audio.play(target + lead + outLat, when);
+    this.audio.play(Math.max(0, target + delaySec + this.audio.getLatencyOffset()), when);
     this._corrEnd = 0;
     this.state = 'locked';
     this.corrections++;
@@ -432,7 +477,7 @@ export class SyncEngine extends Emitter {
     if (!this.audio.playing) { this._align(true); this._report(); return; }
 
     const expected = this.expectedPosition();
-    const heard = this.audio.position() - this.audio.outputLatency(); // what the ear hears now
+    const heard = this.audio.audiblePosition(); // API-derived estimate, not acoustic measurement
     const error = heard - expected;    // + => ahead (sign preserved)
     this.error = error;
     this._track(error);
@@ -440,7 +485,7 @@ export class SyncEngine extends Emitter {
     const nowCtx = this.audio.ctx ? this.audio.ctx.currentTime : 0;
 
     // Gross error (host seek / stall) overrides everything.
-    if (Math.abs(error) > this.cfg.hardThresholdSec && this.policy.shouldReseek(error)) {
+    if (this.policy.shouldReseek(error)) {
       // Guard against scheduling a reseek past end-of-track (minor finding:
       // _align already had this guard, _monitor's own reseek path didn't).
       if (expected >= this.audio.duration) { this.audio.seek(this.audio.duration, false); this._report(); return; }

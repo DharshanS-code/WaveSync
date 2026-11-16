@@ -20,6 +20,9 @@ export class AudioEngine {
     this._latencyOffsetSec = 0; // manual per-device calibration offset (see setLatencyOffset)
     this._lifecycleListeners = [];
     this._wasPlayingBeforeSuspend = false;
+    this._sources = new Set();
+    this._generation = 0;
+    this._stopTimes = new WeakMap();
   }
 
   _ensure() {
@@ -28,21 +31,24 @@ export class AudioEngine {
     // interruption). Previously this only checked `!this.ctx`, so a closed
     // context was never replaced and the engine stayed silently dead.
     if (!this.ctx || this.ctx.state === 'closed') {
-      const AC = window.AudioContext || window.webkitAudioContext;
+      const AC = globalThis.AudioContext || globalThis.webkitAudioContext ||
+        globalThis.window?.AudioContext || globalThis.window?.webkitAudioContext;
+      if (!AC) throw new Error('Web Audio is not supported in this browser.');
       this.ctx = new AC({ latencyHint: 'interactive' });
       this.gain = this.ctx.createGain();
       this.gain.connect(this.ctx.destination);
       this._applyGain();
       this.ctx.onstatechange = () => {
         const st = this.ctx.state;
-        if (st === 'closed' && this._playing) {
+        if (st !== 'running' && this._playing) {
           // The context was torn down out from under us (e.g. an iOS
           // interruption). Freeze position at the last known instant instead
           // of leaving `_playing` true against a dead context — that would
           // make position() read a stale/frozen currentTime indefinitely.
           this._startOffset = this.position();
+          this._stopSource();
           this._playing = false;
-          this.source = null;
+          this._corr = null;
         }
         this._fireLifecycle(st);
       };
@@ -64,13 +70,16 @@ export class AudioEngine {
   async resume() {
     this._ensure();
     if (this.ctx.state === 'suspended' || this.ctx.state === 'interrupted') {
-      try { await this.ctx.resume(); } catch (e) {}
+      await this.ctx.resume();
+      if (this.ctx.state !== 'running') throw new Error('Tap Enable audio to allow playback on this device.');
     }
   }
 
   async decode(arrayBuffer) {
     this._ensure();
-    const buf = await this.ctx.decodeAudioData(arrayBuffer.slice(0));
+    const generation = ++this._generation;
+    const buf = await this.decodeToBuffer(arrayBuffer);
+    if (generation !== this._generation) throw new Error('Audio selection was superseded.');
     this._setActiveBuffer(buf);
     return this.duration;
   }
@@ -78,12 +87,26 @@ export class AudioEngine {
   // Decode without swapping the active buffer (used to preload queued tracks).
   async decodeToBuffer(arrayBuffer) {
     this._ensure();
-    return this.ctx.decodeAudioData(arrayBuffer.slice(0));
+    if (!(arrayBuffer instanceof ArrayBuffer) || arrayBuffer.byteLength > 32 * 1024 * 1024) {
+      throw new Error('Select an audio file no larger than 32 MiB.');
+    }
+    const buffer = await this.ctx.decodeAudioData(arrayBuffer.slice(0));
+    if (!Number.isFinite(buffer.duration) || buffer.duration <= 0 ||
+        buffer.length * buffer.numberOfChannels * 4 > 128 * 1024 * 1024) {
+      throw new Error('Decoded audio exceeds the 128 MiB per-track memory budget.');
+    }
+    return buffer;
   }
 
   setBuffer(buf) { this._setActiveBuffer(buf); }
 
   _setActiveBuffer(buf) {
+    this._stopSource();
+    this._playing = false;
+    this._startOffset = 0;
+    this._startCtx = this.ctx?.currentTime || 0;
+    this._rate = 1;
+    this._corr = null;
     this.buffer = buf;
     this.duration = buf ? buf.duration : 0;
     this.normGain = buf ? this._computeNorm(buf) : 1;
@@ -162,7 +185,15 @@ export class AudioEngine {
       this._corr = null;
       return this._clampPos(endPos + (t - this._startCtx));
     }
-    return this._clampPos(this._startOffset + (t - this._startCtx) * this._rate);
+    return this._clampPos(this._startOffset + Math.max(0, t - this._startCtx) * this._rate);
+  }
+
+  audiblePosition() {
+    if (!this._playing) return this.position();
+    const mapping = this.outputMapping();
+    const outputContextNow = mapping.contextTime + (performance.now() - mapping.performanceTime) / 1000;
+    const delay = Math.max(0, this.ctx.currentTime - outputContextNow) + this._latencyOffsetSec;
+    return this._clampPos(this.position() - delay);
   }
 
   _newSource() {
@@ -170,10 +201,15 @@ export class AudioEngine {
     s.buffer = this.buffer;
     s.playbackRate.value = this._rate;
     s.connect(this.gain);
+    this._sources.add(s);
     s.onended = () => {
-      if (this.source === s && this._playing && this.position() >= this.duration - 0.05) {
+      this._sources.delete(s);
+      s.disconnect();
+      if (this.source === s && this._playing) {
+        this.source = null;
         this._playing = false;
         this._startOffset = this.duration;
+        this._corr = null;
         if (this.onEnded) this.onEnded();
       }
     };
@@ -181,18 +217,54 @@ export class AudioEngine {
   }
 
   _stopSource() {
-    if (this.source) {
-      try { this.source.onended = null; this.source.stop(); } catch (e) {}
-      try { this.source.disconnect(); } catch (e) {}
-      this.source = null;
+    for (const source of this._sources) {
+      source.onended = null;
+      try { source.stop(); } catch { /* Already ended. */ }
+      source.disconnect();
     }
+    this._sources.clear();
+    this.source = null;
+  }
+
+  clear() {
+    ++this._generation;
+    this._setActiveBuffer(null);
+  }
+
+  async dispose() {
+    this.clear();
+    const ctx = this.ctx;
+    this.ctx = null;
+    this.gain?.disconnect();
+    this.gain = null;
+    if (ctx) {
+      ctx.onstatechange = null;
+      if (ctx.state !== 'closed') await ctx.close();
+    }
+    this._lifecycleListeners = [];
+  }
+
+  /** Output mapping is an implementation estimate, not measured acoustic latency. */
+  outputMapping() {
+    const ctx = this.ctx;
+    if (ctx?.getOutputTimestamp) {
+      const stamp = ctx.getOutputTimestamp();
+      if (Number.isFinite(stamp.contextTime) && Number.isFinite(stamp.performanceTime) &&
+          stamp.performanceTime > 0 && Math.abs(performance.now() - stamp.performanceTime) < 1000) {
+        return { contextTime: stamp.contextTime, performanceTime: stamp.performanceTime,
+          source: 'output-timestamp', estimated: true };
+      }
+    }
+    return { contextTime: ctx?.currentTime || 0,
+      performanceTime: performance.now() + this.outputLatency() * 1000,
+      source: ctx ? 'latency-estimate' : 'unavailable', estimated: true };
   }
 
   // Start playback at buffer `offset`, optionally scheduled at ctx-time `when`.
   play(offset = null, when = null) {
     if (!this.buffer) return;
     this._ensure();
-    if (this.ctx.state === 'suspended' || this.ctx.state === 'interrupted') this.ctx.resume();
+    if (this.ctx.state !== 'running') throw new Error('Tap Enable audio before playback.');
     let off = offset != null ? offset : this.position();
     // Clamp with a small safety margin before the true end, rather than
     // exactly at `duration`: starting a source with ~0 samples left produces
@@ -200,8 +272,19 @@ export class AudioEngine {
     const EPS = 0.05;
     const safeEnd = this.duration > EPS ? this.duration - EPS : this.duration;
     off = Math.max(0, Math.min(safeEnd, off));
-    this._stopSource();
     const w = when != null ? Math.max(this.ctx.currentTime, when) : this.ctx.currentTime;
+    const previous = this.source;
+    if (previous && this._playing && w > this.ctx.currentTime) {
+      // Keep the old source audible until the scheduled same-track handoff.
+      for (const source of this._sources) {
+        const stopAt = Math.min(w, this._stopTimes.get(source) ?? Infinity);
+        source.stop(stopAt);
+        this._stopTimes.set(source, stopAt);
+      }
+    } else {
+      this._stopSource();
+    }
+    this._rate = 1;
     const s = this._newSource();
     s.start(w, off);
     this.source = s;
@@ -215,7 +298,7 @@ export class AudioEngine {
   // `duration` seconds, scheduled sample-accurately on the AudioParam so the
   // error crosses 0 precisely at t0+duration and then stays put.
   scheduleCorrection(u, duration) {
-    if (!this.source || !this._playing || !(duration > 0)) return;
+    if (!this.source || !this._playing || !(duration > 0) || this.ctx.currentTime < this._startCtx) return;
     const now = this.ctx.currentTime;
     const pos0 = this.position();            // snapshot (collapses any prior corr)
     const rate = 1 + u;
@@ -246,7 +329,7 @@ export class AudioEngine {
   }
 
   pause() {
-    if (!this._playing) return;
+    if (!this._playing) { this._stopSource(); return; }
     const pos = this.position();
     this._stopSource();
     this._startOffset = pos;

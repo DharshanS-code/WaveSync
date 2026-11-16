@@ -3,16 +3,34 @@
 //   1. ?signal=wss://... query param
 //   2. localStorage 'wavesync.signal'
 //   3. auto: localhost -> Node dev server :8787, otherwise same-origin /api/room
+export function readPreference(key, fallback = null) {
+  try { return globalThis.localStorage?.getItem(`wavesync.${key}`) ?? fallback; }
+  catch { return fallback; }
+}
+export function savePreference(key, value) {
+  try { globalThis.localStorage?.setItem(`wavesync.${key}`, String(value)); return true; }
+  catch { return false; }
+}
+export function validateSignalUrl(value, page = globalThis.location) {
+  const url = new URL(value);
+  if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password || url.hash ||
+      (page?.protocol === 'https:' && url.protocol !== 'wss:')) {
+    throw new Error('Use a WebSocket URL (wss:// on HTTPS), without credentials or fragments.');
+  }
+  return url.href;
+}
 function resolveSignalUrl() {
-  const q = new URLSearchParams(location.search).get('signal');
-  if (q) return q;
-  const saved = localStorage.getItem('wavesync.signal');
-  if (saved) return saved;
-
-  const host = location.hostname;
-  const isDev = host === 'localhost' || host === '127.0.0.1' || host === '' || location.protocol === 'file:';
+  const page = globalThis.location;
+  if (!page) return 'ws://localhost:8787/api/room';
+  const q = new URLSearchParams(page.search).get('signal');
+  const saved = readPreference('signal');
+  for (const value of [q, saved]) {
+    if (!value) continue;
+    try { return validateSignalUrl(value, page); } catch { /* Display invalid override in app settings. */ }
+  }
+  const isDev = ['localhost', '127.0.0.1', '[::1]'].includes(page.hostname);
   if (isDev) return 'ws://localhost:8787/api/room';
-  // Public shared backend — every user connects here automatically, no setup.
+  // Preserve the project's existing public default; owned deployments can override in Settings.
   return 'wss://wavesync-signal.dharshandcu.workers.dev/api/room';
 }
 
@@ -29,7 +47,7 @@ export const CONFIG = {
 
   // Timeline / drift correction
   timelineHeartbeatMs: 2000,
-  syncCheckMs: 1000,
+  syncCheckMs: 250,
   softThresholdSec: 0.02,
   hardThresholdSec: 0.25,
   maxRateAdjust: 0.02,
