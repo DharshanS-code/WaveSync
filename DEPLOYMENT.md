@@ -17,6 +17,19 @@ The production fallback remains the project's existing public endpoint `wss://wa
 
 **Protocol migration:** this re-engineering changes track/timeline validation and recovery. Deploy the matching Worker before advertising the new frontend. An old public Worker may not implement the new welcome epoch/snapshot/resume protocol; production compatibility must be verified rather than assumed.
 
+## GitHub Pages release steps
+
+The repository currently serves Pages from `main` at `/` using the legacy branch publisher. Switch to **Settings → Pages → Build and deployment → Source: GitHub Actions** before merging this release; otherwise the source tree, not the coherent built artifact, is published.
+
+1. Review the PR and its build/test checks. Coordinate a maintenance window: the new protocol is not compatible with old frontend clients.
+2. Deploy and verify the matching Cloudflare Worker from the PR branch (below). Do not advertise the new frontend before this step.
+3. Switch the repository's Pages source to GitHub Actions. This setting change can be made through GitHub's web UI without storing a deployment token.
+4. Merge the PR when ready. `.github/workflows/pages.yml` tests and builds on Ubuntu/Node 22, uploads only `dist/`, and publishes through the `github-pages` environment. PR runs verify but do not deploy.
+5. Wait for **Verify and publish WaveSync** to finish. Confirm the Pages environment URL; the existing project URL is `https://dharshans-code.github.io/WaveSync/`.
+6. Open the app in a fresh browser context, create/join on two devices, select an audio file, and verify playback/pause/reconnect. Existing PWA clients should leave their room before applying the update.
+
+If `github-pages` environment approval is configured, approve the deployment in Actions. A manual workflow run on `main` can republish the latest verified artifact; runs on other branches do not deploy.
+
 ## Cloudflare Worker
 
 Install the backend's pinned Wrangler with `npm --prefix backend install`, authenticate interactively, and inspect `backend/wrangler.toml` and account billing before deployment. Do not enable a paid plan without owner approval.
