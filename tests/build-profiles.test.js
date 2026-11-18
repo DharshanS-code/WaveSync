@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildProfile } from '../scripts/build.mjs';
-import { mkdtemp, readFile, readdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, writeFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root=fileURLToPath(new URL('..',import.meta.url));
 async function tree(directory){const result=[];for(const entry of await readdir(directory,{withFileTypes:true})){const path=resolve(directory,entry.name);if(entry.isDirectory())result.push(...await tree(path));else result.push(path);}return result;}
-async function isolated(fn){const output=await mkdtemp(resolve(root,'test-results/build-profiles-'));try{await fn(output);}finally{await rm(output,{recursive:true,force:true});}}
+async function isolated(fn){await mkdir(resolve(root,'test-results'),{recursive:true});const output=await mkdtemp(resolve(root,'test-results/build-profiles-'));try{await fn(output);}finally{await rm(output,{recursive:true,force:true});}}
 test('self-hosted output omits official endpoints and complete donation implementation',async()=>isolated(async output=>{
  const report=await buildProfile({profile:'self-hosted',output});assert.equal(report.profile,'self-hosted');
  for(const file of await tree(output)){

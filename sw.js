@@ -6,7 +6,13 @@ const SHELL = [
   './index.html', './manifest.json', './src/styles.css', './src/app.js',
   './src/config.js', './src/audio-engine.js', './src/sync-engine.js', './src/network.js',
   './src/transfer.js', './src/ui.js', './src/network-quality.js', './src/track-store.js',
-  './shared/protocol.js', './assets/icon-192.png', './assets/icon-512.png', './assets/upi-qr.png'
+  './src/preferences.js', './src/settings-controller.js', './src/qr.js',
+  './src/bootstrap.js', './src/deployment.js', './src/motion.js',
+  './shared/protocol.js', './build-info.json', './assets/favicon.svg', './assets/apple-touch-icon-180.png',
+  './assets/wavesync-mark-light.svg', './assets/wavesync-mark-dark.svg', './assets/wavesync-mark-mono.svg',
+  './assets/wavesync-lockup-light.svg', './assets/wavesync-lockup-dark.svg', './assets/wavesync-lockup-mono.svg',
+  './assets/wavesync-icon-192.png', './assets/wavesync-icon-512.png', './assets/wavesync-maskable-192.png',
+  './assets/wavesync-maskable-512.png', './assets/wavesync-share-1200x630.png', './assets/wavesync-share.svg'
 ];
 const absolute = new Set(SHELL.map(path => new URL(path, self.registration.scope).href));
 self.addEventListener('install', event => {
