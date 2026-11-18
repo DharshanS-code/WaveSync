@@ -28,6 +28,11 @@ test('offline invitation navigation uses cached canonical shell',async()=>{
   const s=setup();let response;s.events.fetch({request:{url:'https://example.com/music/?room=ABCDEF',method:'GET',mode:'navigate'},respondWith:p=>response=p});
   assert.equal(await(await response).text(),'cached shell');
 });
+test('runtime feature configuration is never cached or intercepted',()=>{
+  const s=setup();let called=false;
+  s.events.fetch({request:{url:'https://example.com/music/config/features.json',method:'GET',mode:'cors'},respondWith:()=>called=true});
+  assert.equal(called,false);
+});
 test('API and cross-origin fetches are never cached or intercepted',()=>{
   const s=setup();let called=false;
   for(const url of ['https://example.com/api/room','https://third-party.test/data'])s.events.fetch({request:{url,method:'GET'},respondWith:()=>called=true});

@@ -12,7 +12,7 @@ export function createStaticServer({port=3000,host='127.0.0.1',directory=root}={
       const url=new URL(req.url,'http://localhost');
       const path=decodeURIComponent(url.pathname);
       const relative=path==='/'?'index.html':path.replace(/^\//,'');
-      if(!/^(index\.html|manifest\.json|sw\.js|src\/[a-z0-9-]+\.(js|css)|shared\/protocol\.js|assets\/[a-z0-9-]+\.(png|svg))$/.test(relative)){
+      if(!/^(index\.html|manifest\.json|build-info\.json|config\/features\.json|sw\.js|src\/[a-z0-9-]+\.(js|css)|shared\/protocol\.js|assets\/[a-z0-9-]+\.(png|svg)|official\/[a-z0-9-]+\.(js|css)|LICENSE)$/.test(relative)){
         res.writeHead(404);res.end('Not found');return;
       }
       const file=resolve(directory,relative);
@@ -25,7 +25,10 @@ export function createStaticServer({port=3000,host='127.0.0.1',directory=root}={
   server.listen(port,host);return server;
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
-  const staticServer=createStaticServer();
+  const profileIndex=process.argv.indexOf('--profile');
+  const profile=profileIndex>=0?process.argv[profileIndex+1]:null;
+  if(profile && !['official','self-hosted'].includes(profile))throw new Error('Choose official or self-hosted.');
+  const staticServer=createStaticServer({directory:profile?resolve(root,'dist',profile):root});
   const signal=process.argv.includes('--static-only')?null:createDevServer();
   console.log('WaveSync: http://localhost:3000 (signaling ws://localhost:8787/api/room)');
   const close=()=>{staticServer.close();signal?.close();};

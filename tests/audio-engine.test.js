@@ -4,33 +4,47 @@ import { AudioEngine } from '../src/audio-engine.js';
 
 class Param {
   value = 1;
-  cancelScheduledValues() {}
-  setValueAtTime(value) { this.value = value; }
+  events = [];
+  cancelScheduledValues(time) { this.events.push(['cancel', time]); }
+  cancelAndHoldAtTime(time) { this.events.push(['hold', time]); }
+  setValueAtTime(value, time) { this.value = value; this.events.push(['set', value, time]); }
+  linearRampToValueAtTime(value, time) { this.value = value; this.events.push(['ramp', value, time]); }
 }
-class Source {
+class Node {
+  constructor(kind) { this.kind = kind; this.connections = []; }
+  connect(target, output = 0, input = 0) { this.connections.push({ target, output, input }); return target; }
+  disconnect() { this.disconnected = true; this.connections = []; }
+}
+class Source extends Node {
+  constructor() { super('source'); }
   playbackRate = new Param();
   stops = [];
-  connect() {}
-  disconnect() { this.disconnected = true; }
   start(when, offset) { this.started = { when, offset }; }
   stop(when) { this.stops.push(when); }
 }
 class Context {
+  static instances = [];
   currentTime = 10;
   state = 'running';
   baseLatency = 0.01;
   outputLatency = 0.02;
-  destination = {};
+  destination = new Node('destination');
   sources = [];
-  createGain() { return { gain: new Param(), connect() {}, disconnect() {} }; }
+  gains = [];
+  splitters = [];
+  mergers = [];
+  constructor() { Context.instances.push(this); }
+  createGain() { const node = new Node('gain'); node.gain = new Param(); this.gains.push(node); return node; }
+  createChannelSplitter(channels) { const node = new Node('splitter'); node.channels = channels; this.splitters.push(node); return node; }
+  createChannelMerger(channels) { const node = new Node('merger'); node.channels = channels; this.mergers.push(node); return node; }
   createBufferSource() { const source = new Source(); this.sources.push(source); return source; }
   async resume() { this.state = 'running'; }
   async close() { this.state = 'closed'; }
 }
 globalThis.window = { AudioContext: Context };
-const buffer = (duration = 60) => ({ duration, length: duration * 100, numberOfChannels: 1,
-  getChannelData: () => new Float32Array(duration * 100).fill(0.1) });
-function setup() { const audio = new AudioEngine(); audio.setBuffer(buffer()); audio.play(0); return audio; }
+const buffer = (duration = 60, channels = 1) => ({ duration, length: duration * 100, numberOfChannels: channels,
+  getChannelData: channel => new Float32Array(duration * 100).fill(channel ? 0.2 : 0.1) });
+function setup(buf = buffer()) { const audio = new AudioEngine(); audio.setBuffer(buf); audio.play(0); return audio; }
 
 test('activating a new track stops the previous source and resets position', () => {
   const audio = setup();
@@ -107,4 +121,138 @@ test('pause is idempotent and preserves the current offset', () => {
   audio.pause(); audio.pause();
   assert.equal(audio.playing, false);
   assert.equal(audio.position(), 7);
+});
+
+test('channel mode and volume settings are lazy before explicit audio activation', () => {
+  const before = Context.instances.length;
+  const audio = new AudioEngine();
+  assert.equal(audio.channelMode, 'off');
+  assert.equal(audio.channelCapability, true);
+  assert.equal(audio.supportsChannelSelection, true);
+  audio.setChannelMode('left');
+  audio.setVolume(0.37);
+  assert.equal(audio.channelMode, 'left');
+  assert.equal(audio.volume, 0.37);
+  assert.equal(audio.ctx, null);
+  assert.equal(Context.instances.length, before);
+  assert.throws(() => audio.setChannelMode('centre'), /left.*right.*off/i);
+});
+
+test('off preserves the original stereo source-to-gain path', () => {
+  const audio = setup(buffer(60, 2));
+  assert.equal(audio.source.connections[0].target, audio.gain);
+  assert.equal(audio.ctx.splitters.length, 1);
+  assert.equal(audio.ctx.mergers.length, 1);
+});
+
+test('left and right route one source channel to both local output channels', () => {
+  const audio = setup(buffer(60, 2));
+  const source = audio.source;
+  const splitter = audio.ctx.splitters[0];
+  const merger = audio.ctx.mergers[0];
+
+  audio.setChannelMode('left');
+  assert.equal(audio.source, source);
+  assert.equal(source.connections[0].target, audio.gain);
+  assert.deepEqual(splitter.connections.map(({ target, output }) => [target, output]),
+    [[audio._channelLeftGain, 0], [audio._channelRightCancelGain, 1],
+      [audio._channelLeftCancelGain, 0], [audio._channelRightGain, 1]]);
+  assert.deepEqual(audio._channelGains.map(node => node.gain.value), [1, -1, 0, 0]);
+  assert.deepEqual(audio._channelLeftGain.connections.map(({ target, input }) => [target, input]),
+    [[merger, 1]]);
+
+  audio.setChannelMode('right');
+  assert.equal(audio.source, source);
+  assert.deepEqual(audio._channelGains.map(node => node.gain.value), [0, 0, -1, 1]);
+  assert.deepEqual(audio._channelRightGain.connections.map(({ target, input }) => [target, input]),
+    [[merger, 0]]);
+});
+
+test('channel transitions retain source, playback position, and schedule short gain ramps', () => {
+  const audio = setup(buffer(60, 2));
+  audio.ctx.currentTime = 14;
+  const source = audio.source;
+  const position = audio.position();
+  audio.setChannelMode('left');
+  audio.setChannelMode('right');
+  assert.equal(audio.source, source);
+  assert.equal(audio.position(), position);
+  const events = [...audio._channelLeftGain.gain.events, ...audio._channelRightGain.gain.events];
+  assert.ok(events.some(event => event[0] === 'ramp'));
+  assert.ok(events.filter(event => event[0] === 'hold' || event[0] === 'cancel').length >= 2);
+  assert.ok(events.filter(event => event[0] === 'ramp').every(event => event[2] <= 14.05));
+});
+
+test('mono buffers retain normal mono output in every channel mode', () => {
+  const audio = setup(buffer(60, 1));
+  audio.setChannelMode('left');
+  assert.equal(audio._effectiveChannelMode, 'off');
+  audio.setChannelMode('right');
+  assert.equal(audio._effectiveChannelMode, 'off');
+  assert.equal(audio.source.connections[0].target, audio.gain);
+});
+
+test('missing splitter or merger degrades to original audio and reports no capability', () => {
+  class LimitedContext extends Context {
+    constructor() { super(); this.createChannelSplitter = undefined; }
+  }
+  const original = globalThis.window.AudioContext;
+  globalThis.window.AudioContext = LimitedContext;
+  try {
+    const audio = new AudioEngine();
+    audio.setChannelMode('left');
+    audio.setBuffer(buffer(60, 2));
+    audio.play(0);
+    assert.equal(audio.channelCapability, false);
+    assert.equal(audio.channelMode, 'left');
+    assert.equal(audio._effectiveChannelMode, 'off');
+    assert.equal(audio.source.connections[0].target, audio.gain);
+  } finally {
+    globalThis.window.AudioContext = original;
+  }
+});
+
+test('channel mode survives disposal and rebuilds routing on context recreation', async () => {
+  const audio = setup(buffer(60, 2));
+  audio.setChannelMode('right');
+  const oldContext = audio.ctx;
+  await audio.dispose();
+  assert.equal(audio.channelMode, 'right');
+  audio.setBuffer(buffer(30, 2));
+  audio.play(0);
+  assert.notEqual(audio.ctx, oldContext);
+  assert.equal(audio._effectiveChannelMode, 'right');
+  assert.equal(audio.ctx.splitters.length, 1);
+});
+
+test('externally closed context rebuilds channel routing without stale nodes', async () => {
+  const audio = setup(buffer(60, 2));
+  audio.setChannelMode('left');
+  const oldContext = audio.ctx;
+  await oldContext.close();
+  audio._ensure();
+  assert.notEqual(audio.ctx, oldContext);
+  assert.equal(audio._effectiveChannelMode, 'left');
+  assert.equal(audio.ctx.splitters.length, 1);
+});
+
+test('setOutputDevice uses AudioContext setSinkId without eager activation', async () => {
+  class SinkContext extends Context {
+    sinkCalls = [];
+    async setSinkId(id) { this.sinkCalls.push(id); }
+  }
+  const original = globalThis.window.AudioContext;
+  globalThis.window.AudioContext = SinkContext;
+  try {
+    const audio = new AudioEngine();
+    assert.equal(audio.outputDeviceCapability, true);
+    const pending = audio.setOutputDevice('speaker-2');
+    assert.equal(audio.ctx, null);
+    assert.equal(await pending, false);
+    await audio.resume();
+    assert.equal(await audio.setOutputDevice('speaker-2'), true);
+    assert.deepEqual(audio.ctx.sinkCalls, ['speaker-2']);
+  } finally {
+    globalThis.window.AudioContext = original;
+  }
 });

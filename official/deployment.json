@@ -1,0 +1,4 @@
+{
+  "profile": "official",
+  "signalUrl": "wss://wavesync-signal.dharshandcu.workers.dev/api/room"
+}

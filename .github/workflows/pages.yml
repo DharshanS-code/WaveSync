@@ -25,13 +25,15 @@ jobs:
         run: npm test
       - name: Verify source and asset integrity
         run: npm run lint
-      - name: Build coherent static app shell
-        run: npm run build
+      - name: Build selected deployment profile
+        env:
+          BUILD_PROFILE: ${{ github.repository == 'DharshanS-code/WaveSync' && 'official' || 'self-hosted' }}
+        run: node scripts/build.mjs --profile "$BUILD_PROFILE"
       - name: Upload Pages artifact
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: dist/${{ github.repository == 'DharshanS-code/WaveSync' && 'official' || 'self-hosted' }}
 
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'

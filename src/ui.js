@@ -1,4 +1,6 @@
 // WaveSync UI: DOM rendering and event delegation only. Audio and network state stay in app.js.
+import { qrSvg } from './qr.js';
+import { animateEntry, animateExit, reducedMotion } from './motion.js';
 const byId = (id, root = document) => root.getElementById ? root.getElementById(id) : root.querySelector(`#${id}`);
 
 export function fmtTime(seconds) {
@@ -22,12 +24,13 @@ export class UI {
     this.role = null;
     this.dragId = null;
     this.toastTimer = null;
-    this.supportReturnFocus = null;
+    this.baseRoutes = new Set(['home', 'room', 'settings', 'privacy']);
+    this.routes = new Set(this.baseRoutes);
 
     this.el = {};
     [
       'home-screen', 'room-screen', 'home-title', 'room-title', 'display-name', 'join-code',
-      'home-error', 'home-network', 'home-network-text', 'signal-url', 'signal-error',
+      'home-error', 'home-network', 'home-network-text', 'signaling-setup',
       'theme-select', 'accent-select', 'room-theme-select', 'room-accent-select',
       'create-room', 'join-room', 'install-app', 'update-app', 'room-role', 'room-code',
       'copy-room', 'share-room', 'connection-pill', 'connection-text', 'track-art',
@@ -37,11 +40,13 @@ export class UI {
       'previous-track', 'next-track', 'volume-control', 'shuffle-toggle', 'repeat-toggle',
       'repeat-label', 'playback-status', 'audio-files', 'queue-list', 'queue-count',
       'queue-empty', 'devices-list', 'devices-empty', 'host-name', 'sync-text',
-      'network-text', 'offline-help', 'toast', 'support-fab', 'support-overlay',
-      'support-close', 'support-copy', 'support-upi-id'
+      'network-text', 'offline-help', 'toast'
     ].forEach((id) => { this.el[id] = byId(id, root); });
 
-    this._bindSupport();
+    this.view = 'home';
+    this.drawerGeneration = 0;
+    this._bindNavigation();
+    this.launchMotion = animateEntry(byId('main-content', this.root), 'launch');
   }
 
   bind(handlers = {}) {
@@ -70,10 +75,8 @@ export class UI {
       const { action, id, direction } = control.dataset;
       if (!action || control.disabled) return;
 
-      if (action === 'signal') {
-        const value = this.el['signal-url']?.value.trim() || '';
-        if (!this._validSignal(value)) return;
-        this._call(action, value);
+      if (action === 'addMusic') {
+        this.el['audio-files']?.click();
       } else if (action === 'selectTrack' || action === 'removeTrack') {
         this._call(action, id);
       } else if (action === 'moveTrack') {
@@ -97,8 +100,10 @@ export class UI {
       const action = control.dataset.action;
       if (action === 'files') {
         this._call('files', control.files);
-      } else if (action === 'theme' || action === 'accent') {
+      } else if (['theme', 'accent', 'repeat', 'outputDevice'].includes(action)) {
         this._call(action, control.value);
+      } else if (action === 'shuffle') {
+        this._call(action, control.checked);
       }
     });
 
@@ -148,7 +153,18 @@ export class UI {
     const trackChanged = trackSignature(this.last.track) !== trackSignature(next.track)
       || (changed('role') && !next.track);
 
-    if (changed('screen')) this._showScreen(next.screen === 'room' ? 'room' : 'home');
+    if (changed('screen')) {
+      this.productScreen = next.screen === 'room' ? 'room' : 'home';
+      this.navigate(this.last.screen === undefined && !next.role ? this._routeFromHash() : this.productScreen, true);
+    }
+    const active = Boolean(next.role);
+    this.root.querySelectorAll('[data-active-room]').forEach(element => { element.hidden = !active; });
+    const banner = byId('active-room-banner', this.root);
+    if (banner) banner.hidden = !active;
+    const signalingUnavailable = next.signalingConfigured === false;
+    this._disabled('create-room', active || !next.online || signalingUnavailable);
+    this._disabled('join-room', active || !next.online || signalingUnavailable);
+    if (this.el['signaling-setup']) this.el['signaling-setup'].hidden = !signalingUnavailable;
     if (changed('role')) {
       this.role = next.role === 'host' ? 'host' : next.role === 'guest' ? 'guest' : null;
       this.root.querySelectorAll('[data-host-only]').forEach((element) => { element.hidden = this.role !== 'host'; });
@@ -205,9 +221,6 @@ export class UI {
     if (changed('shuffle') && this.el['shuffle-toggle']) {
       this.el['shuffle-toggle'].setAttribute('aria-pressed', String(Boolean(next.shuffle)));
     }
-    if (changed('signalUrl') && this.el['signal-url'] && !this.el['signal-url'].matches(':focus')) {
-      this.el['signal-url'].value = next.signalUrl || '';
-    }
     if (changed('online')) this._renderOnline(next.online);
     if (changed('hostName')) this._text('host-name', next.hostName || 'Unknown');
     if (changed('canPrevious') || changed('loading')) this._disabled('previous-track', !next.canPrevious || Boolean(next.loading));
@@ -220,8 +233,13 @@ export class UI {
       this.el['update-app'].hidden = !state.updateAvailable;
     }
     if (Object.prototype.hasOwnProperty.call(state, 'homeError')) this._text('home-error', state.homeError || '');
-    if (Object.prototype.hasOwnProperty.call(state, 'signalError')) this._text('signal-error', state.signalError || '');
 
+    const resync = byId('settings-resync', this.root);
+    if (resync) resync.disabled = next.role !== 'guest';
+    this._text('settings-network', next.networkText || 'Not in a room.');
+    if (byId('settings-repeat', this.root)) byId('settings-repeat', this.root).value = next.repeat || 'off';
+    if (byId('settings-shuffle', this.root)) byId('settings-shuffle', this.root).checked = Boolean(next.shuffle);
+    if (next.settings) this.renderSettings(next.settings, next);
     this.last = next;
   }
 
@@ -337,7 +355,6 @@ export class UI {
     this.renderDevices([]);
     this.progress(0, 0);
     this._text('home-error', '');
-    this._text('signal-error', '');
     if (this.el['join-code']) this.el['join-code'].value = '';
     if (this.el['audio-files']) this.el['audio-files'].value = '';
     if (this.el['transfer-state']) this.el['transfer-state'].hidden = true;
@@ -350,7 +367,14 @@ export class UI {
     this.listeners = [];
     clearTimeout(this.toastTimer);
     if (this.el.toast) this.el.toast.hidden = true;
-    this._closeSupport(false);
+    this._closeDrawer(false, true);
+    // Teardown cancels intent; reduced-motion cleanup may complete valid intent.
+    this.dialogExit?.cancel();
+    this.dialogClosing = false;
+    this.dialogResult = 'cancel';
+    const dialog = byId('confirm-dialog', this.root);
+    if (dialog?.open) dialog.close('cancel');
+    this._stopMotion();
     this.handlers = {};
   }
 
@@ -380,12 +404,230 @@ export class UI {
   }
 
   _showScreen(screen) {
-    const home = screen !== 'room';
-    this.el['home-screen']?.classList.toggle('is-active', home);
-    this.el['room-screen']?.classList.toggle('is-active', !home);
-    if (this.el['home-screen']) this.el['home-screen'].hidden = !home;
-    if (this.el['room-screen']) this.el['room-screen'].hidden = home;
-    requestAnimationFrame(() => (home ? this.el['home-title'] : this.el['room-title'])?.focus({ preventScroll: true }));
+    const changed = this.view !== screen;
+    if (changed) this.pageMotion?.cancel();
+    this.view = screen;
+    this.root.querySelectorAll('[data-screen]').forEach(element => {
+      const active = element.dataset.screen === screen;
+      element.hidden = !active;
+      element.classList.toggle('is-active', active);
+    });
+    this.root.querySelectorAll('[data-route]').forEach(element => {
+      if (element.dataset.route === screen) element.setAttribute('aria-current', 'page');
+      else element.removeAttribute('aria-current');
+    });
+    this._closeDrawer(false);
+    if (changed) this.pageMotion = animateEntry(byId(`${screen}-screen`, this.root), 'page');
+    requestAnimationFrame(() => {
+      if (this.drawerOpen || this.view !== screen) return;
+      const section = location.hash.split('/')[1];
+      const target = section && /^[a-z]+$/.test(section) ? byId(`${screen}-${section}`, this.root) : null;
+      if (target) target.scrollIntoView({ block: 'start' });
+      byId(`${screen}-title`, this.root)?.focus({ preventScroll: true });
+    });
+  }
+
+  _routeFromHash() { return location.hash.replace(/^#/, '').split('/')[0] || 'home'; }
+
+  navigate(screen, replace = false) {
+    const route = this._normalizeRoute(screen);
+    let safe = this.routes.has(route) ? route : 'home';
+    if (safe === 'room' && this.productScreen !== 'room') safe = 'home';
+    if (this._routeFromHash() !== safe) {
+      const url = new URL(location.href); url.hash = safe;
+      history[replace ? 'replaceState' : 'pushState'](null, '', url);
+    }
+    this._showScreen(safe);
+    this._call('view', safe);
+  }
+
+  registerRoute(route) {
+    const safe = this._normalizeRoute(route);
+    if (!safe) return false;
+    this.routes.add(safe);
+    return true;
+  }
+
+  unregisterRoute(route) {
+    const safe = this._normalizeRoute(route);
+    if (!safe || this.baseRoutes.has(safe)) return false;
+    const removed = this.routes.delete(safe);
+    if (removed && this.view === safe) this.navigate('home', true);
+    return removed;
+  }
+
+  _normalizeRoute(route) {
+    const value = String(route ?? '').trim().replace(/^#/, '').split('/')[0].toLowerCase();
+    return /^[a-z][a-z0-9-]*$/.test(value) ? value : '';
+  }
+
+  _bindNavigation() {
+    this._listen(window, 'hashchange', () => { this.navigate(this._routeFromHash(), true); });
+    this._listen(window, 'popstate', () => { this.navigate(this._routeFromHash(), true); });
+    const skip = this.root.querySelector('.skip-link');
+    if (skip) this._listen(skip, 'click', event => {
+      event.preventDefault();
+      byId('main-content', this.root)?.focus();
+    });
+    const app = byId('app', this.root);
+    this._listen(app, 'click', event => {
+      const anchor = event.target.closest('a[href^="#"]');
+      if (anchor && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+        if (anchor.classList.contains('skip-link')) return;
+        event.preventDefault();
+        const hash = anchor.getAttribute('href');
+        if (location.hash !== hash) history.pushState(null, '', hash);
+        this.navigate(hash.slice(1).split('/')[0], true);
+      }
+    });
+    this._listen(app, 'change', event => {
+      const control = event.target.closest('[data-setting]');
+      if (!control || control.type === 'range') return;
+      this._call('setting', control.dataset.setting, control.type === 'checkbox' ? control.checked : control.value);
+    });
+    this._listen(app, 'input', event => {
+      const control = event.target.closest('input[type="range"][data-setting]');
+      if (control) this._call('setting', control.dataset.setting, Number(control.value));
+    });
+    this._listen(byId('nav-open', this.root), 'click', () => this._openDrawer());
+    this._listen(byId('nav-close', this.root), 'click', () => this._closeDrawer());
+    this._listen(byId('nav-backdrop', this.root), 'click', () => this._closeDrawer());
+    this._listen(document, 'keydown', event => {
+      if (!this.drawerOpen) return;
+      if (event.key === 'Escape') this._closeDrawer();
+      if (event.key === 'Tab') this._trapFocus(event, byId('sidebar', this.root));
+    });
+    this._listen(window, 'resize', () => { if (innerWidth >= 960) this._closeDrawer(false, true); });
+    const motionMedia = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (motionMedia?.addEventListener) this._listen(motionMedia, 'change', () => { if (reducedMotion()) this._stopMotion(); });
+    const confirmation = byId('confirm-dialog', this.root);
+    this._listen(confirmation, 'keydown', event => {
+      if (confirmation.open && event.key === 'Tab') this._trapFocus(event, confirmation);
+    });
+    this._listen(confirmation, 'cancel', event => { event.preventDefault(); this._dismissConfirmation('cancel'); });
+    this._listen(confirmation.querySelector('form'), 'submit', event => {
+      event.preventDefault(); this._dismissConfirmation(event.submitter?.value || 'cancel');
+    });
+    this._listen(confirmation, 'click', event => {
+      if (event.target !== confirmation) return;
+      const bounds = confirmation.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+        this._dismissConfirmation('cancel');
+      }
+    });
+  }
+
+  _openDrawer() {
+    if (innerWidth >= 960 || this.drawerOpen) return;
+    ++this.drawerGeneration;
+    this.drawerExit?.cancel(); this.backdropExit?.cancel();
+    this.drawerReturnFocus = document.activeElement;
+    this.drawerOpen = true;
+    const sidebar = byId('sidebar', this.root);
+    sidebar.inert = false;
+    byId('nav-backdrop', this.root).style.pointerEvents = '';
+    sidebar.classList.add('is-open'); sidebar.setAttribute('role', 'dialog'); sidebar.setAttribute('aria-modal', 'true');
+    this.drawerEntry = animateEntry(sidebar, 'drawer');
+    byId('nav-backdrop', this.root).hidden = false;
+    this.backdropEntry = animateEntry(byId('nav-backdrop', this.root), 'backdrop');
+    byId('nav-open', this.root).setAttribute('aria-expanded', 'true');
+    byId('main-content', this.root).inert = true;
+    this.root.querySelector('.mobile-header').inert = true;
+    this.scrollBeforeDrawer = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    // Wait one frame for visibility styles to apply before focusing the formerly hidden drawer.
+    requestAnimationFrame(() => { if (this.drawerOpen) byId('nav-close', this.root).focus(); });
+  }
+
+  _closeDrawer(restore = true, immediate = false) {
+    const sidebar = byId('sidebar', this.root), backdrop = byId('nav-backdrop', this.root);
+    if (!this.drawerOpen) {
+      if (immediate) {
+        ++this.drawerGeneration; this.drawerExit?.cancel(); this.backdropExit?.cancel();
+        sidebar?.classList.remove('is-open'); if (sidebar) sidebar.inert = false;
+        if (backdrop) { backdrop.hidden = true; backdrop.style.pointerEvents = ''; }
+      }
+      return;
+    }
+    this.drawerOpen = false;
+    const generation = ++this.drawerGeneration;
+    this.drawerEntry?.cancel(); this.backdropEntry?.cancel();
+    sidebar.removeAttribute('role'); sidebar.removeAttribute('aria-modal'); sidebar.inert = true;
+    backdrop.style.pointerEvents = 'none';
+    byId('nav-open', this.root).setAttribute('aria-expanded', 'false');
+    byId('main-content', this.root).inert = false;
+    this.root.querySelector('.mobile-header').inert = false;
+    document.body.style.overflow = this.scrollBeforeDrawer || '';
+    if (restore) this.drawerReturnFocus?.focus();
+    const finishSidebar = () => { if (generation !== this.drawerGeneration) return; sidebar.classList.remove('is-open'); sidebar.inert = false; };
+    const finishBackdrop = () => { if (generation !== this.drawerGeneration) return; backdrop.hidden = true; backdrop.style.pointerEvents = ''; };
+    if (immediate || innerWidth >= 960) { finishSidebar(); finishBackdrop(); }
+    else {
+      this.drawerExit = animateExit(sidebar, 'drawer', finishSidebar);
+      this.backdropExit = animateExit(backdrop, 'backdrop', finishBackdrop);
+    }
+  }
+
+  renderSettings(settings, state = {}) {
+    const notificationKeys = { notifyRoom: 'room', notifyPlayback: 'playback', notifyTransfer: 'transfer', notifyReconnect: 'reconnect' };
+    this.root.querySelectorAll('[data-setting]').forEach(control => {
+      const key = control.dataset.setting;
+      const value = notificationKeys[key] ? settings.notifications?.[notificationKeys[key]] : settings[key];
+      if (control.type === 'checkbox') control.checked = value === true;
+      else if (value !== undefined) control.value = String(value);
+    });
+    document.documentElement.dataset.reducedMotion = String(settings.reducedMotion === true);
+    if (reducedMotion()) this._stopMotion();
+    this._text('default-volume-value', `${Math.round(settings.defaultVolume * 100)}%`);
+    const channel = byId('channel-control', this.root);
+    if (channel) channel.hidden = !settings.channelEnabled;
+    const selector = byId('player-channel', this.root);
+    if (selector && typeof state.channelSupported === 'boolean') selector.disabled = !state.channelSupported;
+    if (state.channelHelp) this._text('channel-help', state.channelHelp);
+  }
+
+  renderQR(id, text) {
+    const container = byId(id, this.root);
+    if (!container || !text) return;
+    if (container.dataset.value === text) return;
+    try { container.innerHTML = qrSvg(text); container.dataset.value = text; }
+    catch { container.textContent = 'QR unavailable. Use the copy or share action instead.'; }
+  }
+
+  async confirm(title, description) {
+    const dialog = byId('confirm-dialog', this.root);
+    if (dialog.open) return false;
+    this._text('confirm-title', title); this._text('confirm-description', description);
+    const previous = document.activeElement;
+    return new Promise(resolve => {
+      const finish = () => { dialog.removeEventListener('close', finish); previous?.focus(); resolve(dialog.returnValue === 'confirm'); };
+      dialog.addEventListener('close', finish);
+      this.dialogClosing = false;
+      dialog.returnValue = 'cancel'; dialog.showModal();
+      this.dialogEntry = animateEntry(dialog, 'dialog');
+    });
+  }
+
+  _dismissConfirmation(result = 'cancel') {
+    const dialog = byId('confirm-dialog', this.root);
+    if (!dialog?.open || this.dialogClosing) return;
+    this.dialogClosing = true;
+    this.dialogEntry?.cancel();
+    this.dialogResult = result;
+    this.dialogExit = animateExit(dialog, 'dialog', () => {
+      this.dialogClosing = false;
+      if (dialog.open) dialog.close(result);
+    });
+  }
+
+  _stopMotion() {
+    for (const handle of [this.pageMotion,this.launchMotion,this.drawerEntry,this.backdropEntry,this.dialogEntry]) handle?.cancel();
+    if (!this.drawerOpen) this._closeDrawer(false, true);
+    if (this.dialogClosing) {
+      this.dialogExit?.cancel(); this.dialogClosing = false;
+      const dialog = byId('confirm-dialog', this.root);
+      if (dialog?.open) dialog.close(this.dialogResult || 'cancel');
+    }
   }
 
   _renderConnection(connection) {
@@ -425,8 +667,7 @@ export class UI {
     this.el['home-network']?.classList.toggle('is-offline', !online);
     this._text('home-network-text', online ? 'Network available' : 'Offline — rooms need a network connection');
     if (this.el['offline-help']) this.el['offline-help'].hidden = online;
-    this._disabled('create-room', !online);
-    this._disabled('join-room', !online);
+    // Create/join availability is owned by render(), which also knows the active role.
   }
 
   _applyPreference(kind, value) {
@@ -439,7 +680,7 @@ export class UI {
     if (second) second.value = safe;
     if (kind === 'theme') {
       const dark = safe === 'dark' || (safe === 'system' && window.matchMedia?.('(prefers-color-scheme: dark)').matches);
-      document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#191818' : '#f4f2ef');
+      document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#151715' : '#f7f7f5');
     }
   }
 
@@ -470,24 +711,6 @@ export class UI {
     return button;
   }
 
-  _validSignal(value) {
-    this._text('signal-error', '');
-    if (!value) {
-      this._text('signal-error', 'Enter a signaling endpoint.');
-      this.el['signal-url']?.focus();
-      return false;
-    }
-    try {
-      const url = new URL(value);
-      if (!['ws:', 'wss:'].includes(url.protocol)) throw new Error('protocol');
-      return true;
-    } catch {
-      this._text('signal-error', 'Use a valid ws:// or wss:// WebSocket URL.');
-      this.el['signal-url']?.focus();
-      return false;
-    }
-  }
-
   _unit(value, fallback) {
     const number = Number(value);
     return Number.isFinite(number) ? Math.max(0, Math.min(1, number)) : fallback;
@@ -498,45 +721,8 @@ export class UI {
     this.root.querySelectorAll('.is-dragging, .is-drop-target').forEach((item) => item.classList.remove('is-dragging', 'is-drop-target'));
   }
 
-  _bindSupport() {
-    const fab = this.el['support-fab'];
-    const overlay = this.el['support-overlay'];
-    if (!fab || !overlay) return;
-    this._listen(fab, 'click', () => this._openSupport());
-    this._listen(this.el['support-close'], 'click', () => this._closeSupport());
-    this._listen(overlay, 'click', (event) => { if (event.target === overlay) this._closeSupport(); });
-    this._listen(this.el['support-copy'], 'click', async () => {
-      const value = this.el['support-upi-id']?.textContent.trim() || '';
-      try {
-        await navigator.clipboard.writeText(value);
-        this.notify('UPI ID copied');
-      } catch {
-        this.notify('Could not copy the UPI ID', true);
-      }
-    });
-    this._listen(document, 'keydown', (event) => {
-      if (overlay.hidden) return;
-      if (event.key === 'Escape') this._closeSupport();
-      if (event.key === 'Tab') this._trapFocus(event, overlay);
-    });
-  }
-
-  _openSupport() {
-    this.supportReturnFocus = document.activeElement;
-    this.el['support-overlay'].hidden = false;
-    this.el['support-fab'].setAttribute('aria-expanded', 'true');
-    this.el['support-close']?.focus();
-  }
-
-  _closeSupport(restoreFocus = true) {
-    if (!this.el['support-overlay']) return;
-    this.el['support-overlay'].hidden = true;
-    this.el['support-fab']?.setAttribute('aria-expanded', 'false');
-    if (restoreFocus && this.supportReturnFocus instanceof HTMLElement) this.supportReturnFocus.focus();
-  }
-
   _trapFocus(event, container) {
-    const items = [...container.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])')];
+    const items = [...container.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])')].filter(item => item.getClientRects().length && !item.closest('[hidden]'));
     if (!items.length) return;
     const first = items[0];
     const last = items[items.length - 1];
