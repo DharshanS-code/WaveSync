@@ -10,17 +10,17 @@ async function isolated(fn){await mkdir(resolve(root,'test-results'),{recursive:
 test('self-hosted output omits official endpoints and complete donation implementation',async()=>isolated(async output=>{
  const report=await buildProfile({profile:'self-hosted',output});assert.equal(report.profile,'self-hosted');
  for(const file of await tree(output)){
-  if(!/\\.(?:html|css|js|json|svg)$/.test(file))continue;
+  if(!/\.(?:html|css|js|json|svg)$/.test(file))continue;
   const text=await readFile(file,'utf8');
-  assert.doesNotMatch(text,/wavesync-signal\\.dharshandcu|dharshandcu@nyes|upi:\\/\\/|supportCreator|support-screen|data-donation|instagram\\.com\\/dharshandcu/);
+  assert.doesNotMatch(text,/wavesync-signal\.dharshandcu|dharshandcu@nyes|upi:\/\//|supportCreator|support-screen|data-donation|instagram\.com\/dharshandcu/);
  }
  const config=await readFile(resolve(output,'src/deployment.js'),'utf8');assert.match(config,/"signalUrl":""/);
  assert.match(await readFile(resolve(output,'index.html'),'utf8'),/signaling-setup/);
- const sw=await readFile(resolve(output,'sw.js'),'utf8');assert.doesNotMatch(sw,/official\\//);
+ const sw=await readFile(resolve(output,'sw.js'),'utf8');assert.doesNotMatch(sw,/official\//);
 }));
 test('official output retains isolated endpoint and configurable fail-closed support setting',async()=>isolated(async output=>{
  const report=await buildProfile({profile:'official',output});assert.equal(report.profile,'official');
- assert.match(await readFile(resolve(output,'src/deployment.js'),'utf8'),/wavesync-signal\\.dharshandcu/);
+ assert.match(await readFile(resolve(output,'src/deployment.js'),'utf8'),/wavesync-signal\.dharshandcu/);
  assert.match(await readFile(resolve(output,'index.html'),'utf8'),/support-screen/);
  const sourceFeatures=JSON.parse(await readFile(resolve(root,'config/features.json'),'utf8'));
  const outputFeatures=JSON.parse(await readFile(resolve(output,'config/features.json'),'utf8'));
@@ -40,5 +40,5 @@ test('build rejects unexpected files rather than deleting unrelated data',async(
 test('custom operator endpoint is validated and no endpoint still builds',async()=>isolated(async output=>{
  await assert.rejects(buildProfile({profile:'self-hosted',output,deployment:{signalUrl:'ws://public.example/api'}}),/wss|WebSocket/i);
  await buildProfile({profile:'self-hosted',output,deployment:{signalUrl:'wss://operator.example/api',operator:'Independent',providerNote:'Operator hosted'}});
- assert.match(await readFile(resolve(output,'src/deployment.js'),'utf8'),/wss:\\/\\/operator\\.example/);
+ assert.match(await readFile(resolve(output,'src/deployment.js'),'utf8'),/wss:\/\/operator\.example/);
 }));
