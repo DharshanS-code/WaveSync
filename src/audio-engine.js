@@ -23,6 +23,14 @@ export class AudioEngine {
     this._sources = new Set();
     this._generation = 0;
     this._stopTimes = new WeakMap();
+    this._channelMode = 'off';
+    this._effectiveChannelMode = 'off';
+    this._channelSupported = null;
+    this._channelSplitter = null;
+    this._channelMerger = null;
+    this._channelGains = null;
+    this._outputDeviceId = null;
+    this._appliedOutputDeviceId = null;
   }
 
   _ensure() {
@@ -34,10 +42,18 @@ export class AudioEngine {
       const AC = globalThis.AudioContext || globalThis.webkitAudioContext ||
         globalThis.window?.AudioContext || globalThis.window?.webkitAudioContext;
       if (!AC) throw new Error('Web Audio is not supported in this browser.');
+      if (this.ctx) {
+        this._disconnectChannelGraph();
+        try { this.gain?.disconnect(); } catch { /* Closed context. */ }
+        this._channelSupported = null;
+        this._appliedOutputDeviceId = null;
+      }
       this.ctx = new AC({ latencyHint: 'interactive' });
       this.gain = this.ctx.createGain();
-      this.gain.connect(this.ctx.destination);
+      this._buildChannelGraph();
       this._applyGain();
+      this._applyChannelMode(false);
+      this._applyOutputDevice().catch(() => {});
       this.ctx.onstatechange = () => {
         const st = this.ctx.state;
         if (st !== 'running' && this._playing) {
@@ -111,6 +127,7 @@ export class AudioEngine {
     this.duration = buf ? buf.duration : 0;
     this.normGain = buf ? this._computeNorm(buf) : 1;
     this._applyGain();
+    this._applyChannelMode(false);
   }
 
   // Loudness (RMS) normalization so louder tracks/devices don't dominate.
@@ -128,9 +145,141 @@ export class AudioEngine {
 
   _applyGain() { if (this.gain) this.gain.gain.value = Math.max(0, Math.min(1, this._userVol)) * this.normGain; }
 
+  /**
+   * Local channel filtering. Stereo left/right selects that input channel and
+   * duplicates it to both output channels; off preserves the original stereo.
+   * Mono always follows the original mono path so selecting either side cannot
+   * mute a mono track. The setter is deliberately lazy and never creates audio.
+   */
+  setChannelMode(mode) {
+    if (mode !== 'left' && mode !== 'right' && mode !== 'off') {
+      throw new TypeError("Channel mode must be 'left', 'right', or 'off'.");
+    }
+    this._channelMode = mode;
+    this._applyChannelMode(true);
+  }
+
+  get channelMode() { return this._channelMode; }
+
+  get channelCapability() {
+    if (this._channelSupported != null) return this._channelSupported;
+    const AC = globalThis.AudioContext || globalThis.webkitAudioContext ||
+      globalThis.window?.AudioContext || globalThis.window?.webkitAudioContext;
+    return !!(AC?.prototype?.createChannelSplitter && AC?.prototype?.createChannelMerger);
+  }
+  get supportsChannelSelection() { return this.channelCapability; }
+
+  _buildChannelGraph() {
+    this._disconnectChannelGraph();
+    const ctx = this.ctx;
+    if (!ctx) return;
+    this.gain.connect(ctx.destination);
+    if (typeof ctx.createChannelSplitter !== 'function' ||
+        typeof ctx.createChannelMerger !== 'function') {
+      this._channelSupported = false;
+      return;
+    }
+    try {
+      this._channelSplitter = ctx.createChannelSplitter(2);
+      this._channelMerger = ctx.createChannelMerger(2);
+      this._channelLeftGain = ctx.createGain();
+      this._channelRightCancelGain = ctx.createGain();
+      this._channelLeftCancelGain = ctx.createGain();
+      this._channelRightGain = ctx.createGain();
+      this._channelGains = [this._channelLeftGain, this._channelRightCancelGain,
+        this._channelLeftCancelGain, this._channelRightGain];
+      this.gain.connect(this._channelSplitter);
+      this._channelSplitter.connect(this._channelLeftGain, 0);
+      this._channelSplitter.connect(this._channelRightCancelGain, 1);
+      this._channelSplitter.connect(this._channelLeftCancelGain, 0);
+      this._channelSplitter.connect(this._channelRightGain, 1);
+      this._channelLeftGain.connect(this._channelMerger, 0, 1);
+      this._channelRightCancelGain.connect(this._channelMerger, 0, 1);
+      this._channelLeftCancelGain.connect(this._channelMerger, 0, 0);
+      this._channelRightGain.connect(this._channelMerger, 0, 0);
+      this._channelMerger.connect(ctx.destination);
+      this._channelSupported = true;
+    } catch {
+      this._disconnectChannelGraph();
+      try {
+        this.gain.disconnect();
+        this.gain.connect(ctx.destination);
+      } catch { /* The context itself is unusable; playback will fail normally. */ }
+      this._channelSupported = false;
+    }
+  }
+
+  _disconnectChannelGraph() {
+    for (const node of [this._channelSplitter, ...(this._channelGains || []), this._channelMerger]) {
+      try { node?.disconnect(); } catch { /* Node may already be detached. */ }
+    }
+    this._channelSplitter = null;
+    this._channelMerger = null;
+    this._channelLeftGain = null;
+    this._channelRightCancelGain = null;
+    this._channelLeftCancelGain = null;
+    this._channelRightGain = null;
+    this._channelGains = null;
+  }
+
+  _applyChannelMode(ramp) {
+    const stereo = !!this.buffer && this.buffer.numberOfChannels > 1;
+    const effective = stereo && this._channelSupported ? this._channelMode : 'off';
+    this._effectiveChannelMode = effective;
+    if (!this._channelGains || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    const end = now + (ramp ? 0.02 : 0);
+    // The unchanged direct path remains audible. The matrix adds the selected
+    // side to its opposite output and phase-cancels the unselected side there:
+    // left => [L,L], right => [R,R], off => [L,R].
+    const values = effective === 'left' ? [1, -1, 0, 0]
+      : effective === 'right' ? [0, 0, -1, 1] : [0, 0, 0, 0];
+    for (let i = 0; i < this._channelGains.length; i++) {
+      const param = this._channelGains[i].gain;
+      try {
+        if (ramp && typeof param.cancelAndHoldAtTime === 'function') param.cancelAndHoldAtTime(now);
+        else param.cancelScheduledValues?.(now);
+        if (ramp && typeof param.linearRampToValueAtTime === 'function') {
+          param.linearRampToValueAtTime(values[i], end);
+        } else {
+          param.setValueAtTime?.(values[i], now);
+          if (!param.setValueAtTime) param.value = values[i];
+        }
+      } catch { param.value = values[i]; }
+    }
+  }
+
+  _connectSource(source) {
+    // Keep the historical source -> gain connection for every mode. Channel
+    // selection happens after gain, so mode changes never reconnect a live
+    // source and therefore cannot restart it or disturb scheduler timing.
+    source.connect(this.gain);
+  }
+
+  get outputDeviceCapability() {
+    const AC = globalThis.AudioContext || globalThis.webkitAudioContext ||
+      globalThis.window?.AudioContext || globalThis.window?.webkitAudioContext;
+    return !!AC?.prototype?.setSinkId;
+  }
+
+  async setOutputDevice(deviceId) {
+    if (typeof deviceId !== 'string') throw new TypeError('Output device ID must be a string.');
+    this._outputDeviceId = deviceId;
+    if (!this.ctx) return false;
+    return this._applyOutputDevice();
+  }
+
+  async _applyOutputDevice() {
+    if (!this.ctx || typeof this.ctx.setSinkId !== 'function') return false;
+    if (this._outputDeviceId == null || this._appliedOutputDeviceId === this._outputDeviceId) return true;
+    await this.ctx.setSinkId(this._outputDeviceId);
+    this._appliedOutputDeviceId = this._outputDeviceId;
+    return true;
+  }
+
   hasAudio() { return !!this.buffer; }
 
-  setVolume(v) { this._ensure(); this._userVol = Math.max(0, Math.min(1, v)); this._applyGain(); }
+  setVolume(v) { this._userVol = Math.max(0, Math.min(1, v)); this._applyGain(); }
   get volume() { return this._userVol; }
 
   get playing() { return this._playing; }
@@ -200,7 +349,7 @@ export class AudioEngine {
     const s = this.ctx.createBufferSource();
     s.buffer = this.buffer;
     s.playbackRate.value = this._rate;
-    s.connect(this.gain);
+    this._connectSource(s);
     this._sources.add(s);
     s.onended = () => {
       this._sources.delete(s);
@@ -235,8 +384,12 @@ export class AudioEngine {
     this.clear();
     const ctx = this.ctx;
     this.ctx = null;
+    this._disconnectChannelGraph();
     this.gain?.disconnect();
     this.gain = null;
+    this._channelSupported = null;
+    this._effectiveChannelMode = 'off';
+    this._appliedOutputDeviceId = null;
     if (ctx) {
       ctx.onstatechange = null;
       if (ctx.state !== 'closed') await ctx.close();

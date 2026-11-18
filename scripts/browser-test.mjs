@@ -5,14 +5,16 @@ if (process.platform === 'android' && process.env.WAVESYNC_PROOT_BROWSER === '1'
 }
 const { chromium } = await import('playwright');
 import { createStaticServer } from './dev.mjs';
+import { buildProfile } from './build.mjs';
 import { createDevServer } from '../backend/dev-server.js';
-import { mkdir,writeFile } from 'node:fs/promises';
+import { mkdir,writeFile,readFile } from 'node:fs/promises';
 import { resolve,dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const evidence=resolve(root,'test-results');await mkdir(evidence,{recursive:true});
-const web=createStaticServer({port:0}),signal=createDevServer({port:0});
+await buildProfile({profile:'official'});
+const web=createStaticServer({port:0,directory:resolve(root,'dist','official')}),signal=createDevServer({port:0});
 await Promise.all([web,signal].map(server=>server.listening?Promise.resolve():new Promise(resolve=>server.once('listening',resolve))));
 const base=`http://127.0.0.1:${web.address().port}/?signal=${encodeURIComponent(`ws://127.0.0.1:${signal.address().port}/api/room`)}`;
 let browser;const errors=[];const checks=[];
@@ -29,19 +31,42 @@ try{
     args:['--no-sandbox','--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required']});
   const hostContext=await browser.newContext({viewport:{width:1440,height:900},serviceWorkers:'block'});
   const guestContext=await browser.newContext({viewport:{width:390,height:844},serviceWorkers:'block'});
+  for (const context of [hostContext, guestContext]) {
+    await context.route('**/*', route => {
+      const url = new URL(route.request().url());
+      return url.origin === new URL(base).origin ? route.continue() : route.abort('blockedbyclient');
+    });
+    await context.addInitScript(() => {
+      // Local host candidates suffice here. Never contact public STUN services in QA.
+      const Native = window.RTCPeerConnection;
+      if (Native) window.RTCPeerConnection = class extends Native {
+        constructor(config, constraints) { super({ ...config, iceServers: [] }, constraints); }
+      };
+    });
+    if (context.routeWebSocket) await context.routeWebSocket('**/*', socket => {
+      if (socket.url().startsWith(`ws://127.0.0.1:${signal.address().port}/`)) socket.connectToServer();
+      else socket.close();
+    });
+  }
   const host=await hostContext.newPage(),guest=await guestContext.newPage();
-  for(const page of [host,guest])page.on('pageerror',error=>errors.push(error.message));
-  await host.goto(base);await host.waitForFunction(()=>!!window.wavesync);
+  for(const page of [host,guest]) {
+    page.setDefaultTimeout(30000); page.setDefaultNavigationTimeout(60000);
+    page.on('pageerror',error=>errors.push(error.message));
+  }
+  await host.goto(base);await host.waitForFunction(()=>window.wavesync?.ui.routes.has('support'));
   await host.screenshot({path:resolve(evidence,'home-1440x900.png'),fullPage:true});
-  await host.locator('#support-fab').click();
-  assert.equal(await host.locator('#support-overlay').isVisible(),true);
-  await host.keyboard.press('Escape');
-  assert.equal(await host.locator('#support-overlay').isVisible(),false);
-  checks.push('Support dialog opens and Escape closes without trapped focus');
-  await host.locator('#home-settings > summary').click();
+  await host.evaluate(() => { location.hash = 'support'; });
+  await host.waitForFunction(()=>window.wavesync.ui.view==='support');
+  assert.equal(await host.locator('#support-screen').isVisible(),true);
+  await host.evaluate(() => { location.hash = 'settings'; });
+  await host.waitForFunction(()=>window.wavesync.ui.view==='settings');
+  assert.equal(await host.locator('#home-footer').isVisible(),false);
+  checks.push('Support and Settings hash routes open without secondary-page Home footer');
   await host.locator('#theme-select').selectOption('dark');
   await host.screenshot({path:resolve(evidence,'dark-1440x900.png'),fullPage:true});
   await host.locator('#theme-select').selectOption('light');
+  await host.evaluate(() => { location.hash = 'home'; });
+  await host.waitForFunction(()=>window.wavesync.ui.view==='home');
   await guest.goto(base);await guest.waitForFunction(()=>!!window.wavesync);
   await guest.screenshot({path:resolve(evidence,'home-390x844.png'),fullPage:true});
   await host.locator('#display-name').fill('Desktop host');await host.locator('#create-room').click();
@@ -86,9 +111,12 @@ try{
   assert.equal(await guest.evaluate(()=>window.wavesync.audio.playing),false);
   checks.push('Host departure cannot restart guest via clock updates');
   await guest.evaluate(()=>window.wavesync.leave());
-  await guest.locator('#home-settings > summary').click();
+  await guest.evaluate(() => { location.hash = 'settings'; });
+  await guest.waitForFunction(()=>window.wavesync.ui.view==='settings');
   await guest.locator('#theme-select').selectOption('dark');
   await guest.screenshot({path:resolve(evidence,'dark-390x844.png'),fullPage:true});
+  await guest.evaluate(() => { location.hash = 'home'; });
+  await guest.waitForFunction(()=>window.wavesync.ui.view==='home');
   await guest.locator('#join-code').fill('AAAAAA');
   await guest.locator('#join-room').click();
   await guest.waitForFunction(()=>window.wavesync.state.screen==='home'&&!!window.wavesync.state.homeError);
@@ -99,6 +127,7 @@ try{
   checks.push('Theme switching and 320px reflow');
   assert.deepEqual(errors,[]);
   await writeFile(resolve(evidence,'browser-report.json'),JSON.stringify({status:'pass',checks,playback,errors,
+    artifact:JSON.parse(await (await import('node:fs/promises')).readFile(resolve(root,'dist','official','build-info.json'),'utf8')),
     limitations:['Chromium on one machine, not independent physical audio outputs','No acoustic divergence, Android/iOS, Bluetooth or real Wi-Fi-band validation','Service worker tested separately in unit suite']},null,2));
   console.log(JSON.stringify({status:'pass',checks,playback,errors},null,2));
 }catch(error){await writeFile(resolve(evidence,'browser-report.json'),JSON.stringify({status:'fail',checks,errors,error:error.stack},null,2));throw error;}

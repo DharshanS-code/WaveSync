@@ -3,12 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#f4f2ef" />
+  <meta name="theme-color" content="#f7f7f5" />
   <meta name="description" content="WaveSync coordinates local music playback across your devices." />
   <title>WaveSync</title>
   <link rel="manifest" href="./manifest.json" />
-  <link rel="apple-touch-icon" href="./assets/icon-512.png" />
-  <link rel="icon" type="image/png" href="./assets/icon-512.png" />
+  <!-- PROFILE_HEAD -->
+  <link rel="apple-touch-icon" href="./assets/apple-touch-icon-180.png" />
+  <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
+  <script>
+    try { const theme = localStorage.getItem('wavesync.theme'); if (['light','dark','system'].includes(theme)) document.documentElement.dataset.theme = theme;
+      const accent = localStorage.getItem('wavesync.accent'); if (['coral','rose','amber'].includes(accent)) document.documentElement.dataset.accent = accent;
+      if (JSON.parse(localStorage.getItem('wavesync.settings') || '{}').reducedMotion === true) document.documentElement.dataset.reducedMotion = 'true';
+    } catch { /* The default theme works without storage. */ }
+  </script>
   <link rel="stylesheet" href="./src/styles.css" />
 </head>
 <body>
@@ -33,24 +40,46 @@
     <symbol id="icon-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></symbol>
   </svg>
 
-  <main id="app" class="app-shell">
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <div id="app" class="app-shell">
+    <header class="mobile-header">
+      <a class="brand-lockup" href="#home" aria-label="WaveSync Home"><img src="./assets/wavesync-mark-mono.svg" alt="" width="28" height="28" /><span>WaveSync</span></a>
+      <button id="nav-open" class="icon-button" type="button" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" /></svg></button>
+    </header>
+    <div id="nav-backdrop" class="nav-backdrop" hidden></div>
+    <aside id="sidebar" class="sidebar" aria-label="WaveSync navigation">
+      <div class="sidebar-brand"><a class="brand-lockup" href="#home" aria-label="WaveSync Home"><img src="./assets/wavesync-mark-mono.svg" alt="" width="32" height="32" /><span>WaveSync</span></a><button id="nav-close" class="icon-button" type="button" aria-label="Close navigation"><svg aria-hidden="true"><use href="#icon-x" /></svg></button></div>
+      <nav class="primary-nav" aria-label="Main">
+        <a class="nav-item" href="#home" data-route="home" aria-current="page"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10H3V10Zm6 10v-7h6v7" /></svg><span>Home</span></a>
+        <a class="nav-item" href="#room" data-route="room" data-active-room hidden><svg aria-hidden="true"><use href="#icon-audio" /></svg><span>Your room</span><span class="live-dot" aria-hidden="true"></span></a>
+        <a class="nav-item" href="#settings" data-route="settings"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6m8 4v6" /></svg><span>Settings</span></a>
+        <!-- PROFILE_NAV -->
+      </nav>
+      <div class="sidebar-bottom">
+        <p class="nav-caption">Made for listening together</p>
+        <nav class="secondary-nav" aria-label="Community and legal">
+          <!-- PROFILE_COMMUNITY -->
+          <a href="#privacy" data-route="privacy"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z" /></svg><span>Privacy Policy</span></a>
+        </nav>
+        <!-- PROFILE_CREDIT -->
+      </div>
+    </aside>
+    <main id="main-content" class="main-content" tabindex="-1">
     <section id="home-screen" class="screen home-screen is-active" data-screen="home" aria-labelledby="home-title">
+      <header class="page-heading"><span class="eyebrow">A little closer, through music</span><h1 id="home-title" tabindex="-1">Listen together.</h1><p>Your local music. Your favourite devices.<br />One shared moment.</p></header>
+      <div id="active-room-banner" class="active-room-banner" hidden><div><strong>Your room is still active</strong><p>Browsing does not stop your music.</p></div><a href="#room" class="button button--primary">Return to room</a></div>
+      <div class="home-composition">
       <div class="home-card">
-        <header class="brand-block">
-          <img class="brand-icon" src="./assets/icon-512.png" alt="" width="72" height="72" />
-          <div>
-            <h1 id="home-title" tabindex="-1">WaveSync</h1>
-            <p>Play local music together, in the same room.</p>
-          </div>
-        </header>
+        <div class="section-heading"><div><span class="eyebrow">Start something good</span><h2>A room for your music</h2></div><svg class="section-icon" aria-hidden="true"><use href="#icon-audio" /></svg></div>
 
         <div id="home-network" class="notice notice--compact" role="status" aria-live="polite">
           <span class="status-dot" aria-hidden="true"></span>
           <span id="home-network-text">Checking connection…</span>
         </div>
+        <div id="signaling-setup" class="notice notice--compact" role="status" hidden>Configure a signaling endpoint before creating or joining a room.</div>
 
         <form id="create-form" class="home-form" data-form-action="create">
-          <label for="display-name">Your device name</label>
+          <label for="display-name">Your device name <span class="optional-label">(optional)</span></label>
           <input id="display-name" name="name" type="text" autocomplete="nickname" maxlength="40" placeholder="For example, Kitchen iPad" />
           <button id="create-room" class="button button--primary button--wide" type="submit" data-action="create">
             Create a room
@@ -68,42 +97,15 @@
         </form>
         <p id="home-error" class="form-error" role="alert" aria-live="assertive"></p>
 
-        <details id="home-settings" class="details-panel">
-          <summary>Connection &amp; appearance</summary>
-          <div class="settings-grid">
-            <div class="field-group field-group--wide">
-              <label for="signal-url">Signaling endpoint</label>
-              <div class="inline-field">
-                <input id="signal-url" type="url" inputmode="url" autocomplete="url" placeholder="wss://example.com" aria-describedby="signal-help signal-error" />
-                <button id="save-signal" class="button button--secondary" type="button" data-action="signal">Apply</button>
-              </div>
-              <small id="signal-help">Rooms need a reachable secure WebSocket endpoint.</small>
-              <p id="signal-error" class="form-error" role="alert" aria-live="assertive"></p>
-            </div>
-            <div class="field-group">
-              <label for="theme-select">Theme</label>
-              <select id="theme-select" data-action="theme">
-                <option value="system">System</option>
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-              </select>
-            </div>
-            <div class="field-group">
-              <label for="accent-select">Accent</label>
-              <select id="accent-select" data-action="accent">
-                <option value="coral">Coral</option>
-                <option value="rose">Rose</option>
-                <option value="amber">Amber</option>
-              </select>
-            </div>
-          </div>
-        </details>
 
         <div class="update-actions" aria-label="Application updates">
           <button id="install-app" class="button button--secondary" type="button" data-action="install" hidden>Install WaveSync</button>
           <button id="update-app" class="button button--secondary" type="button" data-action="update" hidden>Update available</button>
         </div>
       </div>
+      <aside class="listening-note" aria-label="How WaveSync works"><img src="./assets/wavesync-mark-mono.svg" alt="" width="96" height="96" /><h2>Different devices.<br />Same soundtrack.</h2><p>Add a browser-supported audio file. Invite your devices with a room code. The host sets the playback; everyone keeps their own volume.</p><div class="note-divider"></div><span class="eyebrow">Direct by design</span><p>Audio travels between devices over encrypted WebRTC, not through the signaling server.</p><p class="capability-note">A network connection is required. Synchronization depends on your devices, network and audio outputs.</p></aside>
+      </div>
+      <!-- PROFILE_FOOTER -->
     </section>
 
     <section id="room-screen" class="screen room-screen" data-screen="room" aria-labelledby="room-title" hidden>
@@ -139,7 +141,7 @@
 
           <div class="now-playing">
             <div id="track-art" class="track-art" aria-hidden="true">
-              <img src="./assets/icon-512.png" alt="" width="72" height="72" />
+              <img class="mark-light" src="./assets/wavesync-mark-light.svg" alt="" width="72" height="72" /><img class="mark-dark" src="./assets/wavesync-mark-dark.svg" alt="" width="72" height="72" />
             </div>
             <div class="track-copy">
               <span id="track-kicker" class="eyebrow">Nothing playing</span>
@@ -189,7 +191,7 @@
               <input id="volume-control" type="range" min="0" max="1" value="1" step="0.01" data-action="volume" aria-label="Local volume" />
             </label>
             <div class="host-tools" data-host-only>
-              <button id="shuffle-toggle" class="tool-button" type="button" data-action="shuffle" aria-pressed="false">
+              <button id="shuffle-toggle" class="tool-button" type="button" data-action="shuffle" aria-label="Shuffle" aria-pressed="false">
                 <svg aria-hidden="true"><use href="#icon-shuffle" /></svg><span>Shuffle</span>
               </button>
               <button id="repeat-toggle" class="tool-button" type="button" data-action="repeat" aria-label="Repeat off" data-value="off">
@@ -199,11 +201,13 @@
             <button id="resync-room" class="button button--secondary" type="button" data-action="resync" data-guest-only>Resync</button>
           </div>
 
+          <div id="channel-control" class="channel-control" hidden><label for="player-channel">Local channel <span class="beta-label">Beta</span></label><select id="player-channel" data-setting="channelMode"><option value="off">Off · Stereo</option><option value="left">Left</option><option value="right">Right</option></select><p id="channel-help" class="capability-note">Only changes audio on this device.</p></div>
+          <details class="room-share"><summary>Show invitation QR</summary><div id="room-qr" class="qr-frame" aria-label="Room invitation QR code"></div><p class="capability-note">Scan on another device, then join with the room code.</p></details>
           <p id="playback-status" class="playback-status" role="status" aria-live="polite">Waiting for a room.</p>
           <input id="audio-files" type="file" accept="audio/*,.mp3,.aac,.wav,.ogg,.opus,.flac,.m4a" multiple hidden data-action="files" />
-          <label id="add-files" class="button button--secondary button--wide file-button" for="audio-files" data-host-only>
+          <button id="add-files" class="button button--secondary button--wide file-button" type="button" data-action="addMusic" data-host-only>
             <svg aria-hidden="true"><use href="#icon-upload" /></svg><span>Add local music</span>
-          </label>
+          </button>
         </section>
 
         <div class="room-sidebar">
@@ -252,41 +256,62 @@
         </div>
       </div>
     </section>
-  </main>
-
-  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
-
-  <button class="support-fab" id="support-fab" type="button" aria-label="Support WaveSync" aria-haspopup="dialog" aria-controls="support-overlay" aria-expanded="false">
-    <svg aria-hidden="true"><use href="#icon-heart" /></svg><span>Support</span>
-  </button>
-
-  <div class="support-overlay" id="support-overlay" hidden>
-    <div class="support-modal" role="dialog" aria-modal="true" aria-labelledby="support-title">
-      <button class="icon-button support-close" id="support-close" type="button" aria-label="Close support dialog">
-        <svg aria-hidden="true"><use href="#icon-x" /></svg>
-      </button>
-      <div class="support-heading">
-        <span class="eyebrow">Keep it independent</span>
-        <h2 id="support-title">Support WaveSync</h2>
-        <p>Made by Dharshan S. A small tip helps keep WaveSync free and open source.</p>
-      </div>
-      <div class="support-upi">
-        <div class="support-qr"><img src="./assets/upi-qr.png" alt="UPI payment QR code" width="152" height="152" /></div>
-        <div class="support-upi-copy">
-          <span class="eyebrow">UPI ID</span>
-          <strong id="support-upi-id">dharshandcu@nyes</strong>
-          <span>Dharshan S</span>
-          <button class="button button--primary" id="support-copy" type="button">Copy UPI ID</button>
-          <a class="button button--secondary" href="upi://pay?pa=dharshandcu@nyes&amp;pn=Dharshan%20S&amp;cu=INR">Pay with UPI app</a>
-        </div>
-      </div>
-      <nav class="support-links" aria-label="WaveSync links">
-        <a href="https://instagram.com/dharshandcu" target="_blank" rel="noopener">Instagram</a>
-        <a href="https://github.com/DharshanS-code/WaveSync" target="_blank" rel="noopener">GitHub</a>
-      </nav>
-    </div>
+    <section id="settings-screen" class="screen settings-screen" data-screen="settings" aria-labelledby="settings-title" hidden>
+      <header class="page-heading"><span class="eyebrow">Make yourself at home</span><h1 id="settings-title" tabindex="-1">Settings</h1><p>Your preferences stay on this device.</p></header>
+      <nav class="settings-index" aria-label="Settings sections"><a href="#settings/appearance">Appearance</a><a href="#settings/audio">Audio</a><a href="#settings/sync">Synchronization</a><a href="#settings/notifications">Notifications</a><a href="#settings/privacy">Privacy</a><a href="#settings/about">About</a></nav>
+      <section id="settings-appearance" class="settings-section" aria-labelledby="appearance-heading"><h2 id="appearance-heading">Appearance</h2>
+        <div class="setting-row"><div><label for="theme-select">Theme</label><p>Follow your device, or choose your own.</p></div><select id="theme-select" data-action="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+        <div class="setting-row"><div><label for="accent-select">Accent</label><p>A subtle touch of colour.</p></div><select id="accent-select" data-action="accent"><option value="coral">Coral</option><option value="rose">Rose</option><option value="amber">Amber</option></select></div>
+        <div class="setting-row"><div><label for="reduced-motion">Reduce motion</label><p>Your device’s reduced-motion preference is always respected.</p></div><input id="reduced-motion" type="checkbox" data-setting="reducedMotion" /></div>
+      </section>
+      <section id="settings-audio" class="settings-section" aria-labelledby="audio-heading"><h2 id="audio-heading">Audio</h2>
+        <div class="setting-row"><div><label for="default-volume">Default volume</label><p>Used when remembered volume is turned off.</p></div><div class="range-setting"><input id="default-volume" type="range" min="0" max="1" step="0.01" data-setting="defaultVolume" /><output id="default-volume-value" for="default-volume">100%</output></div></div>
+        <div class="setting-row"><div><label for="remember-volume">Remember last volume</label><p>Keep your last local volume between visits.</p></div><input id="remember-volume" type="checkbox" data-setting="rememberVolume" /></div>
+        <div class="setting-row"><div><label for="output-device">Audio output</label><p id="output-help">Output selection depends on browser support. No microphone access is required.</p></div><div class="output-controls"><select id="output-device" data-action="outputDevice" aria-describedby="output-help"><option value="">System default</option></select><button class="button button--secondary" type="button" data-action="chooseOutput" id="choose-output">Choose output</button></div></div>
+        <div class="setting-row"><div><label for="settings-repeat">Repeat</label><p>Host playback preference. Guests do not control the room.</p></div><select id="settings-repeat" data-action="repeat"><option value="off">Off</option><option value="all">All tracks</option><option value="one">Current track</option></select></div>
+        <div class="setting-row"><div><label for="settings-shuffle">Shuffle</label><p>Used by this device when hosting.</p></div><input id="settings-shuffle" type="checkbox" data-action="shuffle" /></div>
+        <div class="setting-row"><div><label for="channel-enabled">Channel System <span class="beta-label">Beta</span></label><p>Choose Left, Right or Off in the player. Local to each participant; Off restores stereo.</p></div><input id="channel-enabled" type="checkbox" data-setting="channelEnabled" /></div>
+        <details class="settings-diagnostics"><summary>Audio troubleshooting</summary><p>Keep the page open and enable audio with a tap. Bluetooth can add output delay that browsers cannot measure accurately. Try wired or built-in speakers if devices sound misaligned.</p><p id="audio-diagnostic">Audio has not been activated.</p><button class="button button--secondary" type="button" data-action="enableAudio">Enable audio on this device</button></details>
+      </section>
+      <section id="settings-sync" class="settings-section" aria-labelledby="sync-heading"><h2 id="sync-heading">Synchronization</h2>
+        <div class="setting-row"><div><label for="auto-sync">Automatic synchronization</label><p>Automatically align guest playback with the host. When off, host pause and departure still pause this device; use manual resync to align.</p></div><input id="auto-sync" type="checkbox" data-setting="autoSync" /></div>
+        <div class="setting-row"><div><strong>Manual resync</strong><p id="settings-resync-help">Available to guests in an active room.</p></div><button id="settings-resync" class="button button--secondary" type="button" data-action="resync" disabled>Resync now</button></div>
+        <div class="settings-status"><span class="eyebrow">Observed connection</span><p id="settings-network">Not in a room.</p></div>
+        <details class="settings-diagnostics"><summary>Advanced diagnostics</summary><dl id="advanced-diagnostics"><dt>Clock</dt><dd>Not in a room</dd></dl><p>Clock estimates assume symmetric network paths. Scheduling risk, output latency estimates and acoustic alignment are different quantities. Wi-Fi RSSI, band, channel and PHY rate are not available in ordinary browsers.</p></details>
+      </section>
+      <section id="settings-notifications" class="settings-section" aria-labelledby="notifications-heading"><h2 id="notifications-heading">Notifications</h2><p class="section-description">Choose which event messages appear on this device. Actionable errors remain visible.</p>
+        <div class="setting-row"><label for="notify-room">Room joined / disconnected</label><input id="notify-room" type="checkbox" data-setting="notifyRoom" /></div>
+        <div class="setting-row"><label for="notify-playback">Host started / paused playback</label><input id="notify-playback" type="checkbox" data-setting="notifyPlayback" /></div>
+        <div class="setting-row"><label for="notify-transfer">Track transfer completed / failed</label><input id="notify-transfer" type="checkbox" data-setting="notifyTransfer" /></div>
+        <div class="setting-row"><label for="notify-reconnect">Reconnection</label><input id="notify-reconnect" type="checkbox" data-setting="notifyReconnect" /></div>
+        <div class="setting-row"><div><label for="sound-effects">Event sounds</label><p>A short tone for important events after audio activation. Off by default.</p></div><input id="sound-effects" type="checkbox" data-setting="soundEffects" /></div>
+        <div class="setting-row"><div><label for="browser-notifications">Browser notifications</label><p id="notification-help">Optional notices when this tab is hidden. Permission is requested only when you enable this.</p></div><input id="browser-notifications" type="checkbox" data-setting="browserNotifications" aria-describedby="notification-help" /></div>
+      </section>
+      <section id="settings-privacy" class="settings-section" aria-labelledby="privacy-settings-heading"><h2 id="privacy-settings-heading">Privacy</h2><p id="storage-summary" class="section-description">Local preferences and recent track names are stored in this browser. Audio files are not stored.</p>
+        <div class="setting-row"><div><strong>Reset preferences</strong><p>Restore appearance, audio and playback defaults. Keep your device name and recent track history.</p></div><button class="button button--secondary" type="button" data-action="resetPreferences">Reset</button></div>
+        <div class="setting-row"><div><strong>Clear local WaveSync data</strong><p>Remove WaveSync preferences and recent track history, not server or active-room data. Cached app files can be cleared through browser site settings.</p></div><button class="button button--danger" type="button" data-action="clearData">Clear data</button></div><a class="text-link" href="#privacy">Read our Privacy Policy</a>
+      </section>
+      <!-- PROFILE_ABOUT -->
+    </section>
+    <section id="privacy-screen" class="screen editorial-screen" data-screen="privacy" aria-labelledby="privacy-title" hidden>
+      <header class="page-heading"><span class="eyebrow">Direct by design</span><h1 id="privacy-title" tabindex="-1">Privacy Policy</h1><p>What WaveSync processes, and what stays on your device.</p></header>
+      <nav class="policy-index" aria-label="Privacy contents"><a href="#privacy/data">Room data</a><a href="#privacy/audio">Audio</a><a href="#privacy/local">Local storage</a><a href="#privacy/lifetime">Room lifetime</a><a href="#privacy/providers">Providers</a><a href="#privacy/controls">Your controls</a></nav>
+      <article class="policy-copy">
+        <section id="privacy-data"><h2>Room coordination data</h2><p>The signaling service processes room codes, device names, host or guest roles, connection identities, private resume credentials, track metadata (file name, size, format and duration), playback timelines, and WebRTC connection messages such as SDP and ICE candidates. This information helps devices find one another and coordinate playback. Connection providers may also process IP addresses.</p><p>Invitation links and QR codes contain the public room code, never private resume tokens. Resume credentials are kept in live application and server memory, not local browser storage.</p></section>
+        <section id="privacy-audio"><h2>Your music takes the direct route</h2><p>Audio bytes are transferred directly between the host and guests using encrypted WebRTC DataChannels. The signaling service does not carry audio bytes. Your browser decodes complete files into memory; WaveSync does not upload your library to the signaling server or save audio in its offline cache.</p><p>The host selects files explicitly. Only selected and optionally next-queued tracks are transferred. File and decoded-memory limits apply. Encryption protects transport, but is not a guarantee against a compromised device or an invited participant retaining received audio.</p></section>
+        <section id="privacy-local"><h2>What this browser remembers</h2><p>WaveSync uses local storage for your device name, theme, accent, repeat/shuffle preferences, settings, optional last volume, and up to 20 recent track names with ISO-formatted playback timestamps. There is no automatic expiry for these browser preferences. Channel choices are independent per browser.</p><p>The service worker caches a versioned application shell for offline opening. Offline access does not make room signaling or transfers work without a network. No application analytics or application tracking-cookie code is included in this source; hosting-provider practices are separate.</p></section>
+        <section id="privacy-lifetime"><h2>Rooms are temporary</h2><p>Room state is held in server runtime memory. Host recovery credentials are valid for a 30-second disconnect grace period; guest recovery credentials for 120 seconds. These are recovery windows, not guaranteed physical deletion deadlines. Metadata can remain while participants stay connected; runtime restarts can lose the room. Explicit host departure ends the room immediately.</p><p>Cleanup scheduling and storage behavior depend on the configured signaling deployment. No durable-room or background-playback guarantee is made.</p><p id="deployment-provider"></p></section>
+        <section id="privacy-providers"><h2>Network and hosting providers</h2><p>The configured signaling and WebRTC providers may process connection metadata according to their own policies. This application does not establish their logging or retention periods.</p><p>STUN is not a relay service. Restrictive networks, NAT or client-isolated hotspots can prevent direct connections. Browser estimates of connection or audio timing are not measurements of Wi-Fi hardware quality or acoustic synchronization.</p></section>
+        <section id="privacy-controls"><h2>Your controls</h2><p>In <a href="#settings/privacy">Settings → Privacy</a>, reset preferences or clear WaveSync’s locally stored preferences and history after confirmation. These actions do not delete server data or terminate an active room. Leave the room to disconnect. To remove cached app files as well, use your browser’s site-data controls for this origin; those controls may also affect other apps hosted on the same origin.</p><p>Browser notifications and event sounds are optional and off by default. Notification permission is requested only through your explicit choice. Browser audio activation and output selection remain subject to browser permissions and capabilities.</p></section>
+      </article>
+    </section>
+    <!-- PROFILE_VIEWS -->
+    </main>
   </div>
 
-  <script type="module" src="./src/app.js"></script>
+  <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description"><form method="dialog"><h2 id="confirm-title">Are you sure?</h2><p id="confirm-description"></p><div class="dialog-actions"><button class="button button--secondary" value="cancel" autofocus>Cancel</button><button id="confirm-accept" class="button button--danger" value="confirm">Confirm</button></div></form></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+
+  <script type="module" src="./src/bootstrap.js"></script>
 </body>
 </html>

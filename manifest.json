@@ -1,31 +1,17 @@
 {
-  "name": "WaveSync — Synchronized Music Player",
+  "name": "WaveSync — Listen together",
   "short_name": "WaveSync",
   "description": "Listen to local music together with host-coordinated, peer-to-peer playback.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#262323",
-  "theme_color": "#262323",
+  "background_color": "#f7f7f5",
+  "theme_color": "#f7f7f5",
   "categories": ["music", "entertainment", "utilities"],
   "icons": [
-    {
-      "src": "./assets/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "./assets/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "./assets/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
-    }
+    { "src": "./assets/wavesync-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./assets/wavesync-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./assets/wavesync-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "./assets/wavesync-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

@@ -1,8 +1,7 @@
-// config.js — runtime configuration for WaveSync.
-// Signaling URL resolution order:
-//   1. ?signal=wss://... query param
-//   2. localStorage 'wavesync.signal'
-//   3. auto: localhost -> Node dev server :8787, otherwise same-origin /api/room
+// config.js — runtime configuration for this deployment.
+import { DEPLOYMENT } from './deployment.js';
+// Builds provide their own public endpoint. Overrides remain loopback-only.
+export const DEFAULT_SIGNAL_URL = DEPLOYMENT.signalUrl;
 export function readPreference(key, fallback = null) {
   try { return globalThis.localStorage?.getItem(`wavesync.${key}`) ?? fallback; }
   catch { return fallback; }
@@ -19,19 +18,19 @@ export function validateSignalUrl(value, page = globalThis.location) {
   }
   return url.href;
 }
-function resolveSignalUrl() {
-  const page = globalThis.location;
+export function resolveSignalUrl(page = globalThis.location, deployment = DEPLOYMENT) {
   if (!page) return 'ws://localhost:8787/api/room';
-  const q = new URLSearchParams(page.search).get('signal');
-  const saved = readPreference('signal');
-  for (const value of [q, saved]) {
-    if (!value) continue;
-    try { return validateSignalUrl(value, page); } catch { /* Display invalid override in app settings. */ }
-  }
   const isDev = ['localhost', '127.0.0.1', '[::1]'].includes(page.hostname);
-  if (isDev) return 'ws://localhost:8787/api/room';
-  // Preserve the project's existing public default; owned deployments can override in Settings.
-  return 'wss://wavesync-signal.dharshandcu.workers.dev/api/room';
+  if (!isDev) {
+    if (!deployment?.signalUrl) return '';
+    try { return validateSignalUrl(deployment.signalUrl, page); }
+    catch { return ''; }
+  }
+  const override = new URLSearchParams(page.search).get('signal');
+  if (override) {
+    try { return validateSignalUrl(override, page); } catch { /* Fall back to the local server. */ }
+  }
+  return page.protocol === 'https:' ? 'wss://localhost:8787/api/room' : 'ws://localhost:8787/api/room';
 }
 
 export const CONFIG = {

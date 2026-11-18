@@ -1,6 +1,6 @@
 {
   "name": "wavesync",
-  "version": "1.0.0",
+  "version": "1.5.0",
   "private": false,
   "description": "Mobile-first, peer-to-peer local music with host-coordinated playback.",
   "license": "MIT",
@@ -13,6 +13,8 @@
     "test:browser": "node scripts/browser-test.mjs",
     "lint": "node scripts/check.mjs",
     "build": "node scripts/build.mjs",
+    "build:official": "node scripts/build.mjs --profile official",
+    "build:self-hosted": "node scripts/build.mjs --profile self-hosted",
     "deploy:worker": "cd backend && npx --no-install wrangler deploy"
   },
   "keywords": [

@@ -7,6 +7,14 @@
 - `npm run build`: content-derived static shell artifact and build report.
 - `npm run test:browser`: separate real Chromium host/guest contexts, generated WAV bytes, actual local WebSocket signaling and WebRTC DataChannel transfer/decode, Web Audio sources, role separation, pause, playlist transition, reconnect, host departure, themes and narrow layout. Screenshots/report saved in ignored `test-results/`.
 
+## Redesign verification
+
+`WAVESYNC_PROOT_BROWSER=1 node scripts/redesign-browser.mjs` runs the expanded local Chromium journeys on this Android/PRoot environment. On Linux, omit the compatibility variable. Evidence is saved under `test-results/redesign/`. It covers runtime support flags (true/false/missing/invalid/failure), hash navigation, Home-only footer, drawer focus/inert/Escape/backdrop, theme persistence, default/remembered volume, support QR/intent generation without making payments, real Web Audio channel samples and independent host/guest channel transitions. The 320×844, 390×844, 768×1024 and 1440×900 matrix includes both light and dark themes.
+
+Unit regressions also cover channel graph lifecycle, automatic-sync off/manual/pause, validated preferences and blocked storage, pending notification permission cancellation, independent QR alignment fixtures, and service-worker exclusion of runtime feature config. `test-results` reports are local evidence, not deployed assets. Failed or interrupted reports are retained honestly; only completed final runs count as passes.
+
+Independent QR camera/UPI-app scans require physical validation where no local decoder is available. QR encode/decode fixtures alone do not prove camera readability. Output picker, browser notification behavior and keyboard/screen-reader access also need target-browser checks.
+
 Generated WAV test audio is synthetic input, not fabricated synchronization evidence. Browser contexts on one machine do not establish acoustic timing accuracy across independent outputs.
 
 ## Physical-device acceptance matrix

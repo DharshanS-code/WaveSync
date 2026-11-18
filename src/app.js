@@ -5,6 +5,8 @@ import { SignalClient, PeerManager } from './network.js';
 import { NetworkQuality } from './network-quality.js';
 import { TrackStore, BufferCache } from './track-store.js';
 import { UI } from './ui.js';
+import { SettingsController } from './settings-controller.js';
+import { DEPLOYMENT } from './deployment.js';
 import { validCode, validTrack, validTimeline } from '../shared/protocol.js';
 
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -16,7 +18,7 @@ const mediaActions = ['play', 'pause', 'previoustrack', 'nexttrack', 'seekto'];
 
 export class WaveSync {
   constructor({ ui = new UI(), audio = new AudioEngine() } = {}) {
-    this.ui = ui; this.audio = audio;
+    this.ui = ui; this.audio = audio; this.destroyed = false;
     this.signal = null; this.peers = null; this.sync = null;
     this.store = new TrackStore(); this.cache = new BufferCache();
     this.quality = new NetworkQuality();
@@ -34,24 +36,29 @@ export class WaveSync {
       accent: ['coral','rose','amber'].includes(readPreference('accent')) ? readPreference('accent') : 'coral',
       repeat: ['off','all','one'].includes(readPreference('repeat')) ? readPreference('repeat') : 'off',
       shuffle: readPreference('shuffle') === 'true',
-      signalUrl: CONFIG.signalUrl, online: navigator.onLine, hostName: '',
+      signalUrl: CONFIG.signalUrl, signalingConfigured: Boolean(CONFIG.signalUrl), online: navigator.onLine, hostName: '',
       canPrevious: false, canNext: false, installAvailable: false, updateAvailable: false };
+    this.settings = new SettingsController(this);
     this.ui.bind(this.handlers());
     this.ui.render(this.state);
+    this.settings.apply();
+    const providerCopy = document.getElementById('deployment-provider');
+    if (providerCopy) providerCopy.textContent = DEPLOYMENT.providerNote;
+    if (DEPLOYMENT.operator) document.querySelectorAll('[data-operator]').forEach(element => { element.textContent = DEPLOYMENT.operator; });
+    this.loadBuildInfo();
     const query = new URLSearchParams(location.search);
     const invite = query.get('room');
     if (invite) document.getElementById('join-code').value = invite.toUpperCase();
-    if (query.has('signal')) {
-      try { validateSignalUrl(query.get('signal')); }
-      catch (error) { this.patch({ signalError: error.message }); }
-    }
     this.listen(window, 'online', () => this.patch({ online: true }));
     this.listen(window, 'offline', () => this.patch({ online: false }));
     this.listen(window, 'pagehide', () => this.leave());
     this.listen(document, 'keydown', event => this.shortcut(event));
     this.listen(this.quality, 'change', () => this.networkStatus());
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    this.listen(media, 'change', () => this.ui._applyPreference('theme', this.state.theme));
     this.audio.addLifecycleListener(state => {
       this.patch({ audioEnabled: state === 'running', playing: this.audio.playing });
+      this.settings.diagnostics();
       if (state !== 'running' && this.state.role === 'host' && this.fileMeta) {
         this.revision++; this.publishTimeline(); this.patch({ status: 'Audio interrupted. Tap Play to resume.' });
       }
@@ -64,7 +71,11 @@ export class WaveSync {
       join: safe(code => this.connect(code, 'guest', document.getElementById('display-name').value)),
       leave: () => this.leave(), files: safe(files => this.addFiles(files)),
       play: safe(() => this.play()), pause: () => this.pause(),
-      seek: safe(position => this.seek(position)), volume: value => { this.audio.setVolume(value); this.patch({ volume: this.audio.volume }); },
+      seek: safe(position => this.seek(position)), volume: value => this.settings.setVolume(value),
+      setting: safe((key, value) => this.settings.change(key, value)),
+      view: () => this.settings.diagnostics(),
+      resetPreferences: safe(() => this.settings.reset(false)), clearData: safe(() => this.settings.reset(true)),
+      chooseOutput: safe(() => this.settings.chooseOutput()), outputDevice: safe(id => this.settings.outputDevice(id)),
       previous: safe(() => this.adjacent(-1)), next: safe(() => this.adjacent(1)),
       selectTrack: safe(id => this.loadTrack(id, this.audio.playing)),
       removeTrack: safe(id => this.removeTrack(id)), moveTrack: (id,target,drop) => { this.store.move(id,target,drop); this.renderQueue(); },
@@ -74,11 +85,7 @@ export class WaveSync {
       resync: safe(() => this.resync()), enableAudio: safe(() => this.enableAudio()),
       theme: value => { savePreference('theme',value); this.patch({ theme:value }); },
       accent: value => { savePreference('accent',value); this.patch({ accent:value }); },
-      signal: value => {
-        if (this.signal) return this.fail(new Error('Leave the room before changing the signaling server.'));
-        try { const url=validateSignalUrl(value); savePreference('signal',url); this.patch({signalUrl:url,signalError:''}); this.ui.notify('Signaling server saved.'); }
-        catch(error){this.patch({signalError:error.message});}
-      }, install: safe(() => this.install()), update: safe(() => this.update()) };
+      install: safe(() => this.install()), update: safe(() => this.update()) };
   }
   listen(target, type, fn, session = false) {
     target.addEventListener(type, fn);
@@ -102,6 +109,7 @@ export class WaveSync {
     if (this.signal) return;
     code=String(code).trim().toUpperCase();
     if (!validCode(code)) throw new Error('Enter a six-character room code.');
+    if (!this.state.signalUrl) throw new Error('This deployment needs its own signaling server. Configure signalUrl in config/deployment.json and rebuild.');
     if (!navigator.onLine) throw new Error('Network access is required to create or join a room.');
     if (!globalThis.RTCPeerConnection) throw new Error('WebRTC is not supported in this browser.');
     if (!globalThis.isSecureContext) throw new Error('Open WaveSync using HTTPS, or localhost for development.');
@@ -117,6 +125,7 @@ export class WaveSync {
     savePreference('name',this.state.name);
     if(role==='guest'){
       this.sync=new SyncEngine(this.audio,this.signal.clock,cfg);
+      this.sync.setAutomatic(this.settings.preferences.autoSync);
       this.sync.onStatus=status=>{
         if(session!==this.session)return;
         this.patch({playing:this.audio.playing,syncText:this.audio.ctx?.state==='running'&&this.sync.ready()
@@ -127,12 +136,13 @@ export class WaveSync {
     const on=(target,type,fn)=>this.listen(target,type,event=>{if(session===this.session)fn(event.detail);},true);
     on(this.signal,role==='host'?'created':'joined',welcome=>this.welcome(welcome));
     on(this.signal,'clock',()=>{ this.networkStatus(); if(role==='host')this.publishTimeline(); else if(this.activeId)this.activateGuest(this.activeId); });
-    on(this.signal,'reconnecting',()=>this.patch({connection:'reconnecting',status:'Signaling interrupted. Reconnecting…'}));
+    on(this.signal,'reconnecting',()=>{ this.patch({connection:'reconnecting',status:'Signaling interrupted. Reconnecting…'}); this.settings.event('reconnect','Reconnecting to the room…'); });
     on(this.signal,'ws-close',()=>{
       this.quality.setInterrupted(true); this.audio.pause(); this.sync?.stop(); this.revision++;
       this.hostAvailable = false; ++this.transport;
       if (this.sync) this.sync.timeline = null;
       this.patch({connection:'reconnecting',playing:false,status:'Signaling lost. Playback paused until recovery.'});
+      this.settings.event('room','Room connection lost. Playback paused.');
     });
     on(this.signal,'error',message=>{
       if(!this.epoch || message.fatal){this.leave();this.fail(new Error(message.msg||message.message||'Could not enter room.'));}
@@ -147,12 +157,14 @@ export class WaveSync {
       this.sync?.stop();this.audio.pause();
       if (this.sync) this.sync.timeline = null;
       this.patch({playing:false,connection:message.recovering?'reconnecting':'disconnected',status:message.recovering?'Host disconnected. Waiting for recovery…':'Host left the room. You can leave and join another room.'});
+      this.settings.event('room',message.recovering?'Host disconnected. Waiting for recovery.':'Host left the room.');
     });
     on(this.signal,'host-restored',message=>{
       this.hostId=message.host||message.id||this.hostId;
       this.hostAvailable = true;
       if (this.sync) this.sync.timeline = null;
       this.patch({connection:'connected',status:'Host restored. Rebuilding the audio connection…'});
+      this.settings.event('reconnect','Host restored. Rebuilding audio connection.');
       if(message.track)this.control({from:this.hostId,data:message.track});
       if(message.timeline)this.control({from:this.hostId,data:message.timeline});
     });
@@ -174,7 +186,7 @@ export class WaveSync {
       if(role==='guest'&&id===this.hostId&&trackId===this.activeId)this.patch({transfer:{progress:ratio,state:'receiving'}});
     });
     on(this.peers,'file-done',event=>this.receiveFile(event,session));
-    on(this.peers,'transfer-error',event=>this.fail(new Error(event.message||'Audio transfer failed. Reconnect or resync to retry.')));
+    on(this.peers,'transfer-error',event=>{ const message=event.message||'Audio transfer failed. Reconnect or resync to retry.'; this.fail(new Error(message)); this.settings.event('transfer',message,true); });
     on(this.peers,'p2p-latency',event=>{this.quality.peerSample(event);this.sync?.reportP2pSample(event.rtt);});
     this.audio.onEnded=()=>{if(this.state.role==='host')this.adjacent(1,true).catch(error=>this.fail(error));};
     this.signal.connect(code,role,this.state.name);
@@ -182,7 +194,10 @@ export class WaveSync {
       .catch(()=>{if(session===this.session)this.patch({audioEnabled:false});});
     this.heartbeat=setInterval(()=>this.publishTimeline(),CONFIG.timelineHeartbeatMs);
     this.uiTick=setInterval(()=>{
-      if(document.visibilityState!=='hidden')this.ui.progress(this.audio.position(),this.audio.duration);
+      if(document.visibilityState!=='hidden') {
+        this.ui.progress(this.audio.position(),this.audio.duration);
+        if(this.ui.view==='settings')this.settings.diagnostics();
+      }
     },250);
   }
   welcome(welcome) {
@@ -201,6 +216,9 @@ export class WaveSync {
       if(welcome.timeline)this.control({from:this.hostId,data:welcome.timeline});
     }else if(this.fileMeta){this.fileMeta={...this.fileMeta,epoch:this.epoch};this.signal.control(this.fileMeta);this.publishTimeline();}
     this.setMediaSession();
+    this.settings.event('room', this.state.role === 'host' ? 'Your room is ready.' : 'Joined the room.');
+    this.ui.renderQR('room-qr',this.invite());
+    this.settings.diagnostics();
   }
   async addFiles(files) {
     if(this.state.role!=='host')return;
@@ -304,7 +322,9 @@ export class WaveSync {
       this.patch({track:{id:data.trackId,name:data.name,duration:data.duration},...(changed?{playing:false}:{}),status:this.cache.get(data.trackId)?'Audio ready':'Waiting for audio transfer…'});
       this.activateGuest(data.trackId);this.setMediaSession();
     }else if(data.kind==='timeline'&&validTimeline(data, null)){
+      const transition = this.sync.timeline?.playing !== data.playing;
       if(this.sync.setTimeline(data)){
+        if (transition) this.settings?.event('playback',data.playing?'Host started playback.':'Host paused playback.');
         this.patch({status:data.playing?'Host is playing':'Host paused playback'});
         this.activateGuest(data.trackId);
       }
@@ -320,6 +340,7 @@ export class WaveSync {
       const decoded=await this.decode(buffer);
       if(session!==this.session||epoch!==this.epoch||id!==this.hostId)return;
       this.cache.set(meta.trackId,decoded,this.activeId);
+      this.settings?.event('transfer', 'Audio transfer completed.');
       if(meta.trackId===this.activeId){this.patch({transfer:null,status:'Audio decoded. Enable audio if needed.'});this.activateGuest(meta.trackId);}
     }catch(error){if(session===this.session)this.fail(error);}
     finally { this.pendingDecodeIds.delete(meta.trackId); }
@@ -357,7 +378,9 @@ export class WaveSync {
     try{const prior=JSON.parse(readPreference('history','[]'));savePreference('history',JSON.stringify([{name:item.name,playedAt:new Date().toISOString()},...(Array.isArray(prior)?prior:[]).filter(p=>p.name!==item.name)].slice(0,20)));}catch{/* Corrupt optional history is ignored, never audio state. */}
   }
   invite() {
-    const url=new URL(location.href);url.search='';url.hash='';url.searchParams.set('room',this.state.code);url.searchParams.set('signal',this.state.signalUrl);return url.href;
+    const url=new URL(location.href);url.search='';url.hash='';url.searchParams.set('room',this.state.code);
+    if (['localhost','127.0.0.1','[::1]'].includes(location.hostname)) url.searchParams.set('signal',this.state.signalUrl);
+    return url.href;
   }
   async copyInvite(){await navigator.clipboard.writeText(this.invite());this.ui.notify('Room invitation link copied.');}
   async shareInvite(){if(navigator.share){try{await navigator.share({title:'WaveSync',text:`Join room ${this.state.code}`,url:this.invite()});}catch(error){if(error.name!=='AbortError')throw error;}}else await this.copyInvite();}
@@ -372,8 +395,16 @@ export class WaveSync {
       for(const [action,fn]of Object.entries(handlers)){try{navigator.mediaSession.setActionHandler(action,event=>Promise.resolve(fn(event)).catch(error=>this.fail(error)));}catch{/* Unsupported browser action. */}}
     }
   }
+  async loadBuildInfo() {
+    try {
+      const response=await fetch('./build-info.json',{cache:'no-store'});
+      if(!response.ok)return;
+      const info=await response.json();
+      if(typeof info.version==='string'&&typeof info.revision==='string')document.getElementById('build-info').textContent=`Version ${info.version} · build ${info.revision}`;
+    } catch { /* Source development has no generated build metadata. */ }
+  }
   shortcut(event) {
-    if(this.state.role!=='host'||event.target.closest('input,select,textarea,button,dialog')||event.ctrlKey||event.metaKey||event.altKey)return;
+    if(this.ui.view!=='room'||this.state.role!=='host'||event.target.closest('input,select,textarea,button,dialog')||event.ctrlKey||event.metaKey||event.altKey)return;
     if(event.code==='Space'){event.preventDefault();(this.audio.playing?Promise.resolve(this.pause()):this.play()).catch(error=>this.fail(error));}
   }
   async registerPWA() {
@@ -391,6 +422,7 @@ export class WaveSync {
   async install(){if(!this.installPrompt)return;await this.installPrompt.prompt();await this.installPrompt.userChoice;this.installPrompt=null;this.patch({installAvailable:false});}
   async update(){if(this.signal)throw new Error('Leave the room before installing the update to avoid interrupting audio.');if(this.registration?.waiting){this.updating=true;this.registration.waiting.postMessage({type:'ACTIVATE_UPDATE'});}}
   leave() {
+    const wasInRoom = Boolean(this.state.role);
     ++this.session;++this.selection;++this.transport;this.hostAvailable=false;
     this.pendingDecodeIds.clear();this.decodeChain=Promise.resolve();
     clearInterval(this.heartbeat);clearInterval(this.uiTick);
@@ -403,7 +435,7 @@ export class WaveSync {
     this.ui.reset();this.patch({screen:'home',role:null,code:'',connection:'disconnected',track:null,playing:false,loading:false,transfer:null,status:'',syncText:'Not in a room',canPrevious:false,canNext:false});
     this.setMediaSession();
     const url=new URL(location.href);url.searchParams.delete('room');history.replaceState(null,'',url);
+    if(wasInRoom)this.settings?.event('room','Left the room.');
   }
-  async destroy(){this.leave();this.listeners.splice(0).forEach(off=>off());this.quality.destroy();this.ui.destroy();await this.audio.dispose();}
+  async destroy(){if(this.destroyed)return;this.destroyed=true;this.extensions?.forEach(extension=>extension.destroy?.());this.leave();this.listeners.splice(0).forEach(off=>off());this.quality.destroy();this.ui.destroy();await this.audio.dispose();}
 }
-if(typeof window!=='undefined')window.addEventListener('DOMContentLoaded',()=>{window.wavesync=new WaveSync();});

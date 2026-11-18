@@ -4,7 +4,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 let checked=0;
-for(const folder of ['src','shared','backend','scripts','tests']){
+for(const folder of ['src','official','shared','backend','scripts','tests']){
   for(const name of await readdir(resolve(root,folder))){
     if(!/\.(js|mjs)$/.test(name))continue;
     const file=resolve(root,folder,name);

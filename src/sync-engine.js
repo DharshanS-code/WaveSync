@@ -305,6 +305,7 @@ export class SyncEngine extends Emitter {
     this.activeTrackId = null;
     this.epoch = null;
     this.destroyed = false;
+    this.automatic = true;
     this.networkQuality = cfg.networkQuality || null;
 
     this._onVisible = () => {
@@ -376,7 +377,7 @@ export class SyncEngine extends Emitter {
     this.epoch = tl.epoch;
     this.timeline = { ...tl };
     this.emit('timeline', this.timeline);
-    this._align(changed);
+    if (this.automatic || !tl.playing) this._align(changed);
     return true;
   }
 
@@ -392,9 +393,20 @@ export class SyncEngine extends Emitter {
   start() {
     if (this.destroyed) return;
     this.state = 'armed'; this.controller.reset(); this.policy.reset(); this.health.reset();
-    this._corrEnd = 0; this.scheduler.start(); this._align(true);
+    this._corrEnd = 0;
+    if (this.automatic) { this.scheduler.start(); this._align(true); }
   }
-  manualResync() { this._align(true); }
+  setAutomatic(enabled) {
+    const next = enabled !== false;
+    if (next === this.automatic) return;
+    this.automatic = next;
+    if (!this.automatic) {
+      this.scheduler.stop(); this.audio.cancelCorrection(); this._corrEnd = 0;
+    } else if (this.state !== 'idle') {
+      this.scheduler.start(); this._align(true);
+    }
+  }
+  manualResync() { this._align(true, true); }
   stop() { this.scheduler.stop(); this.audio.cancelCorrection(); this.state = 'idle'; }
   destroy() {
     this.stop();
@@ -414,8 +426,9 @@ export class SyncEngine extends Emitter {
   }
 
   /** Hard alignment: schedule playback so the HEARD audio lands on expected. */
-  _align(force) {
+  _align(force, manual = false) {
     if (!this.ready()) return;
+    if (!this.automatic && this.timeline.playing && !manual) return;
     const tl = this.timeline;
     if (!tl.playing) {
       this.audio.cancelCorrection();
@@ -471,7 +484,7 @@ export class SyncEngine extends Emitter {
   }
 
   _monitor() {
-    if (!this.ready()) return;
+    if (!this.automatic || !this.ready()) return;
     const tl = this.timeline;
     if (!tl.playing) { if (this.audio.playing) this.audio.pause(); this._report(); return; }
     if (!this.audio.playing) { this._align(true); this._report(); return; }
