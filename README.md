@@ -1,51 +1,175 @@
-# WaveSync
+<div align="center">
 
-**Listen together. Keep your music local.**
+# 🎧 WaveSync
 
-WaveSync is a mobile-first music PWA. A host selects local audio, guests receive it directly over encrypted WebRTC, and a host-authoritative timeline coordinates playback. No accounts or server-side audio upload. Actual acoustic synchronization depends on browser, device, network and output route; perfect or submillisecond accuracy is not guaranteed.
+### Your music. Your room. In sync.
 
-## Features
+**A local-first, mobile-friendly music PWA for listening together — with direct peer-to-peer audio transfer and host-led playback coordination.**
 
-- Local browser-decoded audio with bounded current/next caching.
-- Playlist append, track selection, previous/next, removal and keyboard/pointer reordering; repeat and shuffle.
-- Host-only transport controls; guest local volume, explicit audio activation and manual resync.
-- Stable track/transfer identity, serialized file transfer and backpressure/resource limits.
-- Live-room identity resume, peer rebuilding, authoritative pause on host loss and deliberate re-entry after expired recovery.
-- Original responsive music interface, light/dark/system themes and accents, accessible labels/focus/live errors, safe-area and reduced-motion support.
-- Estimated clock/output diagnostics and adaptive delivery buffering; unavailable Wi-Fi hardware information is explicitly not fabricated.
-- Versioned offline application shell and safe user-requested updates outside active rooms.
-- Persistent desktop navigation and a keyboard-accessible mobile drawer; dedicated Settings, Privacy Policy and optional creator-support pages.
-- Local Channel System Beta: Off by default, with independent Left/Right/Off output for hosts and guests, mono fallback and short live gain transitions.
-- Remembered/default volume, automatic-sync and event-notification preferences, capability-gated output selection, and confirmed local-data controls.
+<p>
+  <img src="https://img.shields.io/badge/Platform-PWA-7C3AED?style=for-the-badge&logo=pwa" alt="PWA">
+  <img src="https://img.shields.io/badge/Audio-Web_Audio_API-2563EB?style=for-the-badge" alt="Web Audio API">
+  <img src="https://img.shields.io/badge/Transfers-WebRTC-0EA5E9?style=for-the-badge" alt="WebRTC">
+  <img src="https://img.shields.io/badge/License-MIT-16A34A?style=for-the-badge" alt="MIT License">
+</p>
 
-Audio format support follows actual browser `decodeAudioData`; unsupported or corrupt files produce an error. Full transfer/decode is required before guest playback: this is not progressive streaming.
+<p>
+  <a href="#-highlights">Highlights</a> ·
+  <a href="#-how-it-works">How it works</a> ·
+  <a href="#-get-started">Get started</a> ·
+  <a href="#-deployment">Deployment</a> ·
+  <a href="#-documentation">Docs</a>
+</p>
 
-## Run locally
+</div>
+
+---
+
+## ✨ The idea
+
+WaveSync lets one person host a listening room while friends join from their own devices. The host chooses audio stored locally; guests receive the selected tracks directly through **WebRTC data channels**. A host-authoritative timeline coordinates playback without uploading audio to a central media server.
+
+> [!IMPORTANT]
+> WaveSync aims for coordinated playback, not guaranteed perfect synchronization. Real-world timing depends on the browser, device, network and audio output route. Perfect or submillisecond accuracy is not promised.
+
+## 🚀 Highlights
+
+<table>
+  <tr>
+    <td width="50%">
+      <h3>🎵 Your files stay yours</h3>
+      Decode local audio in the browser and transfer it directly to room peers. No account or server-side audio upload is required.
+    </td>
+    <td width="50%">
+      <h3>⏱️ Coordinated playback</h3>
+      Host-led transport, clock calibration, adaptive buffering and guest-side synchronization corrections.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <h3>📱 Made for small screens</h3>
+      Responsive music interface, accessible mobile navigation, safe-area support and reduced-motion preferences.
+    </td>
+    <td width="50%">
+      <h3>🎨 Make it yours</h3>
+      Light, dark or system theme, accent choices, remembered volume and configurable local notifications.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <h3>🔁 A proper listening queue</h3>
+      Append, select, reorder, remove, skip, repeat and shuffle tracks.
+    </td>
+    <td width="50%">
+      <h3>🧰 Built for imperfect networks</h3>
+      Transfer backpressure, resource limits, peer recovery, diagnostics and manual resynchronization.
+    </td>
+  </tr>
+</table>
+
+### More in the box
+
+- **Room recovery:** live-room identity resume, peer rebuilding and deliberate re-entry after expired recovery.
+- **Guest controls:** local volume, explicit audio activation and manual resync.
+- **Channel System Beta:** optional Left / Right / Off output selection, mono fallback and short gain transitions. Off by default.
+- **Offline shell:** versioned application shell with safe, user-requested updates outside active rooms.
+- **Privacy controls:** local preferences and history, plus confirmed controls for clearing WaveSync local data.
+- **Official-only support extension:** optional creator-support interface is kept out of self-hosted builds.
+
+## 🧭 How it works
+
+```mermaid
+flowchart LR
+    H["🎧 Host device<br/>Local audio files"]
+    S["Room signaling<br/>WebSocket"]
+    G1["📱 Guest device"]
+    G2["💻 Guest device"]
+    H -->|"Room coordination"| S
+    S <-->|"Join / peer setup"| G1
+    S <-->|"Join / peer setup"| G2
+    H ==>|"Audio data · WebRTC"| G1
+    H ==>|"Audio data · WebRTC"| G2
+    H -.->|"Authoritative timeline"| G1
+    H -.->|"Authoritative timeline"| G2
+```
+
+1. The host creates a room and selects local audio.
+2. Guests join with a room code or invitation link.
+3. Signaling helps peers establish their WebRTC connections.
+4. Audio is transferred directly from the host to each guest.
+5. The host timeline coordinates playback while guests can manage their own local volume.
+
+<details>
+<summary><strong>What is sent through the signaling service?</strong></summary>
+
+Signaling carries room coordination, peer connection setup and metadata such as track information. Audio is transferred peer-to-peer. Invitations share room codes, never private resume tokens.
+
+</details>
+
+## ⚡ Get started
+
+### Requirements
+
+- Node.js and npm
+- A modern browser with Web Audio and WebRTC support
+- Audio files supported by the browser's `decodeAudioData`
+
+### Run locally
 
 ```bash
+git clone https://github.com/DharshanS-code/WaveSync.git
+cd WaveSync
 npm install --ignore-scripts
 npm run build
 npm run dev -- --profile self-hosted
 ```
 
-Open **http://localhost:3000**. Create a room, add audio, wait for clock calibration, and press Play. In another browser/device, enter the room code or use the invitation link. Guests may need to tap **Enable audio**.
+Open **http://localhost:3000**.
 
-The local server binds loopback, so another phone cannot use your laptop's localhost. Physical LAN tests require trusted HTTPS/WSS or your deployed infrastructure. Never use plaintext ws from an HTTPS page.
+### Start a listening room
 
-```bash
-npm test
-npm run lint
-npm run build
-npm run test:browser
-```
+| Host | Guest |
+|:--|:--|
+| 1. Create a room | 1. Enter the room code or open the invite |
+| 2. Add local audio | 2. Wait for the host to share the track |
+| 3. Wait for clock calibration | 3. Tap **Enable audio** if prompted |
+| 4. Press Play | 4. Listen and adjust local volume |
 
-The `lint` command verifies syntax/imports/assets, not ESLint or static types. Ordinary `npm run build` produces the neutral **`dist/self-hosted/`** artifact. `npm run build:official` explicitly produces **`dist/official/`**. Each has its own content-derived service-worker revision and exact SHA-256 inventory. Deploy **only the selected child directory**, never the parent `dist/`, legacy files or repository root. Rebuild after editing source; the profile server serves built files.
+> [!NOTE]
+> The local development server binds to loopback. Another phone cannot join using your computer's `localhost`. For physical LAN testing, use trusted HTTPS/WSS or your deployed infrastructure. Do not use plaintext `ws://` from an HTTPS page.
 
-On Android shared storage: `npm install --ignore-scripts --bin-links=false`. Debian PRoot Chromium tests may require `WAVESYNC_PROOT_BROWSER=1 npm run test:browser`; see development notes for the explicitly approved local test-only sandbox exception.
+### Useful commands
 
-## Signaling and deployment
+| Command | Purpose |
+|:--|:--|
+| `npm run dev -- --profile self-hosted` | Run the self-hosted development server |
+| `npm run build` | Build the self-hosted profile |
+| `npm run build:official` | Build the official profile |
+| `npm test` | Run unit and integration tests |
+| `npm run lint` | Verify syntax, imports and assets |
+| `npm run test:browser` | Run browser tests |
 
-Local loopback default: `ws://localhost:8787/api/room`. Self-hosted public builds have **no default signaling service** and never fall back to the official Worker. Configure your own public WSS endpoint in `config/deployment.json`, then rebuild:
+The `lint` command is a project validation script; it is not ESLint or a static type checker.
+
+## 🏗️ Build profiles
+
+WaveSync has deliberately separated **self-hosted** and **official** build outputs.
+
+| Profile | Output | Intended use |
+|:--|:--|:--|
+| Self-hosted | `dist/self-hosted/` | Your own deployment; no creator-support module |
+| Official | `dist/official/` | Official deployment with optional support extension |
+
+Each profile has its own content-derived service-worker revision and SHA-256 inventory.
+
+> [!WARNING]
+> Deploy **only the selected child directory** — never the parent `dist/`, repository root or legacy files. Rebuild after changing source files; the profile server serves built output.
+
+Self-hosted artifacts do not include creator-support UI, payment data, support routes or runtime feature-config fetching. This separation prevents accidental inclusion; it is not a security boundary against deliberate copying.
+
+## 🌐 Deployment
+
+Self-hosted public builds have **no default signaling service** and do not fall back to the official Worker. Configure your own public WSS endpoint in `config/deployment.json`, then rebuild:
 
 ```json
 {
@@ -55,60 +179,94 @@ Local loopback default: `ws://localhost:8787/api/room`. Self-hosted public build
 }
 ```
 
-Leave `signalUrl` blank to produce an unconfigured build with a setup notice and disabled Create/Join. Invalid supplied public URLs fail the build. Public query/saved overrides remain ignored; loopback testing overrides remain supported. Invitations share room codes, never private resume tokens. Official-only endpoint inputs are in `official/deployment.json`; they are selected only by the explicit official build (or exact upstream repository identity in Pages CI).
+Leave `signalUrl` blank to create an unconfigured build with a setup notice and disabled Create/Join controls. Invalid supplied public URLs fail the build.
 
-Self-hosted artifacts contain no creator-support module, payment data, support route/markup/styles, personal promotional UI or runtime feature-config fetch. MIT license/upstream attribution remains. Build separation prevents accidental inheritance, not deliberate copying: a public endpoint is not a secret or an access-control mechanism. Backend authorization/abuse policy requires separate deployment work.
+For phone-only Cloudflare dashboard publishing, use the complete `backend/dashboard-worker.js` file and preserve the existing `ROOMS` → `RoomDO` binding.
 
-For phone-only Cloudflare dashboard publishing, use the complete `backend/dashboard-worker.js` file and preserve the existing `ROOMS` → `RoomDO` binding; see [DEPLOYMENT.md](DEPLOYMENT.md).
+**Deploy the re-engineered frontend and backend together.** The public Worker may still use an older protocol until its owner deploys the matching backend. Local verification alone does not prove production endpoint compatibility.
 
-**The re-engineered frontend and backend must be deployed together.** The public Worker may still run the old protocol until its owner deploys the matching backend. Local verification does not establish production endpoint compatibility. No paid service or production deployment is required for local work.
+<details>
+<summary><strong>Network and room limits</strong></summary>
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) before publishing. STUN helps direct connectivity but is not TURN; cross-NAT or client-isolated Wi-Fi can fail. Host-star upload grows with guest count; the room limit is eight guests.
+- STUN helps peers discover direct connectivity; it is not TURN.
+- Cross-NAT networks or client-isolated Wi-Fi may prevent peer connections.
+- Host upload demand grows with the number of guests.
+- A room is limited to eight guests.
+- No paid service or production deployment is required for local development.
 
-## Interface and local preferences
+</details>
 
-Home, Settings and Privacy Policy use hash views so refresh/back/forward remain compatible with static subdirectory hosting; Support is an official-only extension. An active room has its own navigation item; going Home or opening Settings does not leave the room or stop playback. Only Home shows the global footer.
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the full deployment and protocol migration guide.
 
-Buttons share subtle press feedback and fine-pointer hover states. Static theme-aware gradients add depth to artwork/elevated surfaces; page, drawer and confirmation motion uses only opacity/transform. Navigation remains immediately usable. Standalone PWA opening has a short once-per-document, nonblocking reveal, not a delayed splash screen. OS and app reduced-motion settings disable decorative movement; actual OS-controlled splash animation is outside the app's control.
+## 🎚️ Timing, audio and Wi-Fi realities
 
-Settings applies Light/Dark/System theme immediately. Default volume is saved separately from optional remembered playback volume. Channel System Beta is off by default; when enabled, both hosts and guests get a local Left/Right/Off selector. Left or Right duplicates the chosen source channel into both local output speakers. Off preserves stereo; mono stays mono. These settings never enter room messages. Turning automatic synchronization off disables guest alignment/corrections until manual resync or re-enablement; host pause/departure still pauses the guest.
+WaveSync calibrates clocks using independent midpoint samples and an explicitly symmetric-path assumption. Playback uses the Web Audio clock, output timestamp mapping where available, and bounded gradual or hard correction.
 
-Notification categories, optional browser notifications and event sounds are local preferences. Permission is requested only on explicit enablement. Output selection appears only where Web Audio/browser capabilities support it. Reset/clear actions require confirmation and do not delete server data or terminate rooms. Clear removes only `wavesync.*` local-storage entries; browser site settings can also remove cached app files.
+A few important boundaries:
 
-### Official build: show or hide Support the Creator
+- Rate adjustment can alter pitch.
+- Browser latency APIs provide implementation estimates, not external acoustic calibration.
+- Ordinary browsers do not expose Wi-Fi RSSI, link speed, frequency band, channel, PHY or congestion.
+- Optional Network Information API values such as downlink and effective connection type are coarse estimates.
+- Throughput, stalls and peer delivery variation help guide buffering; RTT alone is not a Wi-Fi-quality or output-latency measurement.
+- Full file transfer and decode are required before guest playback. **This is not progressive audio streaming.**
 
-This system is emitted only by `npm run build:official`; changing a flag cannot add it to self-hosted artifacts. For an official build, edit **`config/features.json`**:
+## 🔐 Privacy and reliability
 
-```json
-{ "supportCreator": true }
-```
+| Area | Design |
+|:--|:--|
+| Audio | Direct peer-to-peer transfer; no server-side audio upload |
+| Accounts | No account required |
+| Local data | Preferences and history stay in the current browser |
+| Invitations | Room codes only; private resume tokens are not shared |
+| Room recovery | In-memory and time-limited; a server restart requires a fresh room |
+| Resource handling | Bounded transfer, backpressure and file/decoded-memory budgets |
+| Permissions | Notification permission is requested only after explicit enablement |
 
-Change **`true`** to **`false`** to hide it, or **`false`** to **`true`** to show it. Missing/invalid/failed config hides the entry and blocks the support view. Runtime fetch uses `no-store`; the service worker does not cache this flag. Editing a served config takes effect on reload without rebuilding application code. A repository edit still needs the usual Pages build/deployment to publish the file.
+Clearing WaveSync data removes only `wavesync.*` local-storage entries. Browser site-data controls may also remove cached application files. Reset actions do not delete server data or terminate rooms.
 
-Support uses only the owner-supplied UPI ID and a generated QR/UPI intent, with optional amounts. WaveSync does not verify payments. QR algorithm tests do not replace scanning with a real UPI app.
+> [!CAUTION]
+> An offline application shell does not mean offline room functionality. Background playback, mobile interruptions, real Wi-Fi conditions and acoustic divergence still need physical-device testing.
 
-The asset family is generated locally with `python3 -I scripts/generate-assets.py .`. See [DESIGN.md](DESIGN.md) for the design contract.
+## 📚 Documentation
 
-## Timing and Wi-Fi limitations
+<table>
+  <tr><th>Guide</th><th>What you'll find</th></tr>
+  <tr><td><a href="ARCHITECTURE.md">🏛️ Architecture</a></td><td>Application structure, audio and synchronization pipeline</td></tr>
+  <tr><td><a href="DEVELOPMENT.md">🛠️ Development</a></td><td>Development workflow and PRoot environment notes</td></tr>
+  <tr><td><a href="TESTING.md">🧪 Testing</a></td><td>Test commands and physical-device acceptance matrix</td></tr>
+  <tr><td><a href="DEPLOYMENT.md">🚀 Deployment</a></td><td>Build profiles, hosting and protocol migration</td></tr>
+  <tr><td><a href="DESIGN.md">🎨 Design</a></td><td>Visual and interaction design contract</td></tr>
+  <tr><td><a href="CHANGELOG.md">📝 Changelog</a></td><td>Unreleased engineering changes</td></tr>
+</table>
 
-Clock calibration maps monotonic local timestamps to server time using independent midpoint samples, with an explicitly symmetric-path assumption and uncertainty. Playback uses the Web Audio clock, output timestamp mapping where available, and bounded gradual/hard correction. Rate adjustment can alter pitch. Browser latency APIs are implementation estimates, not external acoustic calibration.
+## 🧪 Testing checklist
 
-Ordinary browsers do not expose RSSI, Wi-Fi link speed, frequency band/channel, PHY or congestion. Optional Network Information API downlink/effectiveType/saveData are coarse estimates. Actual transfer throughput/stalls and matched peer delivery variation guide buffering/timeouts/preloading. RTT is not a direct Wi-Fi-quality or output-latency measurement. Native Android/desktop Wi-Fi instrumentation would require a separate native boundary and permission/API review; none is fabricated or required here.
+- [ ] Host creates a room and adds local audio
+- [ ] Guest joins from a separate device/browser
+- [ ] Guest enables audio and receives the complete track
+- [ ] Host transport changes coordinate with guests
+- [ ] Guest local volume remains independent
+- [ ] Reconnect and room recovery behavior is checked
+- [ ] Mobile navigation, reduced motion and safe areas are checked
+- [ ] Physical-device behavior is tested on the target network
 
-## Reliability and privacy
+Automated tests are useful, but they do not replace real-device checks across browsers, networks and audio output routes.
 
-Server validates host role/identity, host↔guest signaling, epochs, track identity, sequences and bounded payloads. File and decoded-memory budgets help low-memory devices, but decode checking occurs after the browser allocates PCM. Signaling carries metadata/names and coordination; audio remains direct P2P. Local preferences/history remain in the current browser and can be cleared using site-data controls.
+## 🤝 Contributing
 
-Room resume is in-memory and time-limited. Node/Cloudflare object restart loses room state and requires a fresh room. Offline shell does not mean offline room functionality. Background playback, mobile interruptions, real Wi-Fi/output-device conditions and acoustic divergence need physical testing.
+Bug reports, focused improvements and documentation fixes are welcome. Before making a change, read the relevant guide in the [documentation](#-documentation), run the applicable checks, and describe the devices/browsers used when reporting playback or synchronization behavior.
 
-## Documentation
+## 📄 License
 
-- [Architecture and audio/sync pipeline](ARCHITECTURE.md)
-- [Development and PRoot environment](DEVELOPMENT.md)
-- [Tests and physical-device acceptance matrix](TESTING.md)
-- [Deployment and protocol migration](DEPLOYMENT.md)
-- [Unreleased engineering changes](CHANGELOG.md)
+WaveSync is released under the **[MIT License](LICENSE)**.
 
-## License
+<div align="center">
 
-[MIT](LICENSE). The new original WaveSync identity and owner-supplied optional support information are included.
+---
+
+**🎶 Keep it local. Keep it together.**
+
+<sub>Built for shared listening, with realistic expectations about browser and network timing.</sub>
+
+</div>
