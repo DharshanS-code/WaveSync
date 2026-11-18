@@ -12,7 +12,7 @@ test('self-hosted output omits official endpoints and complete donation implemen
  for(const file of await tree(output)){
   if(!/\.(?:html|css|js|json|svg)$/.test(file))continue;
   const text=await readFile(file,'utf8');
-  assert.doesNotMatch(text,/wavesync-signal\.dharshandcu|dharshandcu@nyes|upi:\/\//|supportCreator|support-screen|data-donation|instagram\.com\/dharshandcu/);
+  for(const forbidden of ['wavesync-signal.dharshandcu','dharshandcu@nyes','upi:','supportCreator','support-screen','data-donation','instagram.com/dharshandcu']) assert.equal(text.includes(forbidden),false,`self-hosted output contains ${forbidden}`);
  }
  const config=await readFile(resolve(output,'src/deployment.js'),'utf8');assert.match(config,/"signalUrl":""/);
  assert.match(await readFile(resolve(output,'index.html'),'utf8'),/signaling-setup/);
