@@ -1,0 +1,17 @@
+# WaveSync
+
+> WaveSync is a free, open-source web app that plays one local music file in sync across several devices. A host creates a room, guests join with a room code, and the audio is sent directly between devices over encrypted WebRTC. No accounts, and no audio is uploaded to a server.
+
+## Pages
+
+- [Home / app](https://dharshans-code.github.io/WaveSync/): Create or join a room and play music together
+- [Privacy Policy](https://dharshans-code.github.io/WaveSync/#privacy): What the app stores and how rooms work
+
+## Code and docs
+
+- [GitHub repository](https://github.com/DharshanS-code/WaveSync): Source code, setup and how the sync engine works
+- [README](https://github.com/DharshanS-code/WaveSync/blob/main/README.md): Features, local setup, deployment and sync design
+
+## Optional
+
+- [Creator on Instagram](https://instagram.com/dharshandcu)
